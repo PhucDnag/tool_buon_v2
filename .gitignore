@@ -1,0 +1,17 @@
+# Generated output
+/build/
+/dist/
+/AccountManager.exe
+/AccountManager_fixed.exe
+/AccountManager_escort.exe
+/AccountManager_portable.exe
+/control/
+/logs/
+
+# Local account data and machine settings
+/accounts.json
+/manager_config.json
+
+# Optional decompiled reference output
+/recovered/
+/tools/decompiled/

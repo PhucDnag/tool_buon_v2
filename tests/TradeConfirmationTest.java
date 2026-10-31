@@ -1,0 +1,363 @@
+import autotrade.*;
+import GameObjects.*;
+import GameScreen.GameScreen;
+import Main.GameCanvas;
+import InterfaceComponents.iCommand;
+import CLib.mVector;
+import netcommand.global.GlobalService;
+
+public final class TradeConfirmationTest {
+    static final String PROMPT="Bạn có 31 phút để hoàn thành 1 chuyến đi buôn, nếu hết thời hạn đá quý sẽ bị hủy. Bạn có muốn đi không ?";
+    static int checks;
+    static void check(boolean pass,String text) { checks++; if(!pass) throw new AssertionError(text); }
+    static mVector options(String caption) { mVector list=new mVector(); list.addElement(new iCommand(caption)); return list; }
+    static LiveTrade start() { return start(new TradeConfig()); }
+    static LiveTrade start(TradeConfig config) {
+        GameCanvas.loadmap.idMap=19; GameCanvas.loadmap.nameMap="Cửa Biển";
+        GameCanvas.currentDialog=null; GameScreen.player=new Player(); GameScreen.player.x=200; GameScreen.player.y=200;
+        GameScreen.Vecplayers.removeAllElements(); Item.VecInvetoryPlayer.removeAllElements();
+        MainObject npc=new MainObject(); npc.ID=5; npc.typeObject=2; npc.name="Dylan"; npc.x=200; npc.y=200;
+        GameScreen.Vecplayers.addElement(npc);
+        Item item=new Item(); item.Id=50; item.ItemCatagory=4; item.itemName="Lừa vàng"; item.numPotion=1;
+        Item.VecInvetoryPlayer.addElement(item);
+        config.market=1;
+        LiveTrade live=new LiveTrade(config,new MapGraph()); live.toggle(1000); live.tick(null,1000);
+        npc.strChatPopup="Ta chỉ còn 3 viên kim cương, 3 viên riuby, 3 viên saphia";
+        live.chat(npc); live.tick(null,2000); return live;
+    }
+    static mVector sixCargo() {
+        mVector list=new mVector(); for(int i=0;i<6;i++) list.addElement(new Item()); return list;
+    }
+    static mVector goods() {
+        mVector items=new mVector(); Item gem=new Item(); gem.Id=81; gem.ItemCatagory=4; gem.itemName="Kim Cương"; items.addElement(gem); return items;
+    }
+    public static void main(String[] args) {
+        check(TradeSignals.startTradeConfirmation(PROMPT),"Match exact supplied screenshot");
+        check(TradeSignals.startTradeConfirmation(PROMPT.replace(' ', '\n')),"Line-wrapped prompt also matches");
+        check(TradeSignals.startTradeConfirmation(PROMPT.replace('1', '9')),"Duration is not hardcoded");
+        check(!TradeSignals.startTradeConfirmation("Bạn có muốn hủy chuyến đi buôn?"),"Do not confuse cancel with start");
+        LiveTrade live=start(); GlobalService net=GlobalService.gI(); int summons=net.potionCalls;
+        Object dialog=new Object(); GameCanvas.currentDialog=dialog; mVector buttons=options("Ok"); iCommand ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,PROMPT,buttons); live.tick(null,2500);
+        check(ok.calls==1,"Auto OK before animal appears");
+        check(live.engine.state==TradeEngine.SUMMON,"OK still waits for server to create animal");
+        live.dialog(dialog,PROMPT,buttons); live.tick(null,2600);
+        check(ok.calls==1 && net.potionCalls==summons,"Repeated render cannot confirm or summon twice");
+        MainObject beast=new MainObject(); beast.ID=70; beast.x=200; beast.y=200;
+        live.tick(beast,3000); live.tick(beast,4000);
+        live.menu(options("Mua Kim Cương"),2,5,""); live.tick(beast,5000);
+        int buys=net.buyCalls;
+        live.shop(goods(),-1,0); live.tick(beast,5500);
+        check(net.buyCalls==buys,"Inventory gem list must not trigger purchase");
+        live.shop(goods(),0,0); live.tick(beast,6000);
+        check(net.buyCalls==buys+1 && net.lastItem==81 && net.lastShop==0 && net.lastQuantity==1,"Gem submenu opens normal shop then sends real buy_item");
+        live.shop(goods(),0,0); live.tick(beast,7000);
+        check(net.buyCalls==buys+1,"Duplicate shop response cannot repeat pending purchase");
+        live.serverText("Mua thành công"); live.tick(beast,8000);
+        check(live.view.cargo==1,"Read buy acknowledgement after OK and shop chain");
+        live.tick(beast,10000); live.shop(goods(),13,11); live.tick(beast,11000);
+        check(net.buyCalls==buys+2 && net.lastShop==0,"Next purchase reuses the observed shop without reopening menus");
+
+        // Starting a trip through a merchant's generic menu also has no animal or gem name in its prompt.
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        live.menu(options("Đi buôn"),1,5,""); live.tick(beast,5000);
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,PROMPT,buttons); live.tick(beast,6000);
+        check(ok.calls==1,"Confirm merchant trip-start prompt before specific buy request");
+        buys=net.buyCalls; live.shop(goods(),13,11); live.tick(beast,7000);
+        check(net.buyCalls==buys+1,"Continue shopping after merchant trip confirmation");
+
+        // Exact root menu from the reported screenshot, followed by the gem submenu and shop.
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        int menus=net.menuCalls; buys=net.buyCalls;
+        live.menu(options("Mua bán"),7,99,""); live.tick(beast,5000);
+        check(net.menuCalls==menus,"Ignore Mua ban menu from an unrelated NPC");
+        live.menu(options("Mua bán"),7,5,""); live.tick(beast,6000);
+        check(net.menuCalls==menus+1 && net.lastNpc==5 && net.lastIndex==0,"Select exact Mua ban root menu");
+        check(net.buyCalls==buys,"Opening trade menu is not a purchase");
+        live.menu(options("Mua Kim Cương"),8,5,""); live.tick(beast,7000);
+        check(net.menuCalls==menus+2,"Continue into gem submenu after Mua ban");
+        live.shop(goods(),13,11); live.tick(beast,8000);
+        check(net.buyCalls==buys+1,"Mua ban chain reaches actual purchase");
+        live.shop(goods(),13,11); live.tick(beast,9000);
+        check(net.buyCalls==buys+1,"Wait for acknowledgement without buying twice");
+        live.serverText("Mua thành công"); live.tick(beast,10000);
+        check(live.view.cargo==1,"Mua ban purchase acknowledgement updates cargo");
+
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        check(live.hideMenu(5) && !live.hideMenu(99),"Hide only the auto-buy merchant menu");
+        dialog=new Object(); live.dialog(dialog,PROMPT,options("Ok"));
+        check(live.hideDialog(dialog) && !live.hideDialog(new Object()),"Hide only the owned trade confirmation");
+        buys=net.buyCalls; live.shop(goods(),13,11);
+        check(live.takeHiddenShop() && !live.takeHiddenShop(),"Consume hidden shop flag once");
+        live.tick(beast,5000);
+        check(net.buyCalls==buys+1,"First hidden purchase is sent");
+        live.serverText("Mua thành công"); live.tick(beast,5100); live.tick(beast,5200); live.tick(beast,5350);
+        check(net.buyCalls==buys+1,"No repeat purchase before 4s cadence");
+        live.tick(beast,8999);
+        check(net.buyCalls==buys+1,"No purchase one millisecond before 4s");
+        live.tick(beast,9000);
+        check(net.buyCalls==buys+2,"Cached shop buys again after cadence");
+        Object manual=new Object(); GameCanvas.currentDialog=manual;
+        mVector manualButtons=options("Ok");
+        live.dialog(manual,"Bạn có muốn xóa vật phẩm?",manualButtons);
+        check(!live.hideDialog(manual),"Manual dialog stays visible during pending purchase");
+        MainObject manualFocus=new MainObject(); GameScreen.ObjFocus=manualFocus;
+        live.tick(beast,9200);
+        check(GameScreen.ObjFocus==manualFocus,"Pending purchase does not steal manual target");
+        check(GameCanvas.currentDialog==manual && ((iCommand)manualButtons.elementAt(0)).calls==0,"Pending purchase leaves manual dialog untouched");
+        check(net.buyCalls==buys+2,"Fast cadence still waits for server acknowledgement");
+        live.toggle(9300);
+        check(!live.hideMenu(5) && !live.hideDialog(dialog),"Manual UI remains visible after auto stops");
+
+        live=start(); dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,"Bạn có muốn xóa vật phẩm?",buttons); live.tick(null,2500);
+        check(ok.calls==0,"Unrelated OK remains untouched");
+        live.dialog(dialog,PROMPT,buttons); GameCanvas.currentDialog=new Object(); live.tick(null,2600);
+        check(ok.calls==0,"Stale dialog instance is not accepted");
+        live.toggle(2700); GameCanvas.currentDialog=dialog; live.dialog(dialog,PROMPT,buttons); live.tick(null,2800);
+        check(ok.calls==0,"Disabled auto cannot press OK");
+
+        // Verify extended bought signals
+        check(TradeSignals.bought("Mua 1 Kim Cương thành công"), "Phrase: Mua 1 Kim Cương thành công");
+        check(TradeSignals.bought("Bạn đã mua thành công 1 Kim Cương"), "Phrase: Bạn đã mua thành công");
+        check(TradeSignals.bought("Giao dịch thành công"), "Phrase: Giao dịch thành công");
+        check(TradeSignals.bought("Bạn nhận được 1 Kim Cương"), "Phrase: Bạn nhận được 1 Kim Cương");
+        check(!TradeSignals.bought("Bạn không đủ vàng để mua"), "Negative purchase signal rejected");
+
+        // Verify TradeEngine WAIT_BUY retry mechanism
+        TradeEngine engine = live.engine;
+        engine.start(30000);
+        live.view.market = 1;
+        engine.state = TradeEngine.BUY;
+        live.view.cargo = 0;
+        live.view.cargoRevision = 1;
+        engine.tick(live.view, 31000);
+        check(engine.state == TradeEngine.WAIT_BUY, "Engine enters WAIT_BUY");
+        // Simulate 10s timeout without confirmation
+        engine.tick(live.view, 42000);
+        check(engine.state == TradeEngine.WAIT_BUY, "Engine retries purchase instead of failing on first timeout");
+        check(engine.status.indexOf("Chờ xác nhận mua (1/2)") >= 0, "Engine updates status to retry attempt 1");
+        // Second timeout
+        engine.tick(live.view, 53000);
+        check(engine.state == TradeEngine.WAIT_BUY, "Engine retries purchase on second timeout");
+        check(engine.status.indexOf("Chờ xác nhận mua (2/2)") >= 0, "Engine updates status to retry attempt 2");
+        // Third timeout -> exhausted -> now fails
+        engine.tick(live.view, 64000);
+        check(engine.state == TradeEngine.STOP, "Engine stops after exhausting retry attempts");
+        check(engine.status.indexOf("Chưa xác nhận giao dịch mua") >= 0, "Engine reports failure only after 3 full cycles");
+
+        // Exact full message must end purchasing without waiting for the retry timeout.
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        live.shop(goods(),13,11); live.tick(beast,5000);
+        buys=net.buyCalls;
+        dialog=new Object(); GameCanvas.currentDialog=dialog;
+        live.dialog(dialog,"Không thể mua",options("Ok")); live.tick(beast,5100);
+        check(live.engine.state==TradeEngine.TO_SELL && live.view.full,"Exact full message immediately starts escort");
+        check(GameCanvas.currentDialog==null,"Dismiss full dialog so escort can move");
+        live.tick(beast,5200);
+        check(net.buyCalls==buys,"No more purchases after full message");
+        check(!TradeSignals.full("Không thể mua vì không đủ vàng"),"Unrelated purchase failure is not full cargo");
+
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        live.shop(goods(),13,11); live.tick(beast,5000);
+        live.serverText("Mua thành công"); live.tick(beast,5100); live.tick(beast,5200);
+        live.serverText("Kim Cương: 0, Rubi: 0, Saphia: 0; Ngọc trai đen: 999"); live.tick(beast,5300);
+        check(live.engine.state==TradeEngine.TO_SELL && live.view.cargo==1,"All gems exhausted during buying escorts partial load, ignoring pearls");
+
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        live.shop(goods(),13,11); live.tick(beast,5000);
+        live.serverText("Hết hàng"); live.tick(beast,5100);
+        check(live.engine.state==TradeEngine.STOCK,"One depleted gem triggers fresh stock check");
+        MainObject merchant=MainObject.get_Object(5,(byte)2);
+        merchant.strChatPopup="Ta chỉ còn 0 viên kim cương, 2 viên riuby, 0 viên saphia, 99 viên ngọc trai đen";
+        live.chat(merchant); live.tick(beast,5300);
+        check(live.engine.state==TradeEngine.BUY && live.engine.gem==1,"Continue buying ruby when diamonds are exhausted");
+        live.tick(beast,5500);
+        live.serverText("Hết hàng"); live.tick(beast,5600);
+        merchant.strChatPopup="Chỉ còn ngọc trai đen"; live.chat(merchant); live.tick(beast,5800);
+        check(live.engine.state==TradeEngine.RECALL,"Rechecked pearl-only stock cancels a confirmed empty animal rather than selling it");
+
+        // Low-HP existing cargo is replaced outside a buying market using the item twice.
+        live=start(); live.toggle(2200);
+        GameCanvas.loadmap.idMap=25; GameCanvas.loadmap.nameMap="Rừng Chết";
+        beast.name="Lừa vàng"; beast.hp=10; beast.maxHp=100;
+        int beforeReplace=net.potionCalls, beforeInfo=net.menuCalls;
+        live.toggle(3000); live.tick(beast,3000);
+        check(live.engine.state==TradeEngine.WAIT_REPLACE && net.potionCalls==beforeReplace+1,
+            "Use matching animal item to cancel existing low-HP trip outside market");
+        live.tick(beast,3500);
+        check(net.potionCalls==beforeReplace+1 && net.menuCalls==beforeInfo,"Do not cancel twice or use animal-info menu");
+        live.tick(null,4000);
+        check(live.engine.state==TradeEngine.WAIT_NEW && net.potionCalls==beforeReplace+2,"Use item again only after old animal disappears");
+        MainObject replacement=new MainObject(); replacement.ID=999; replacement.name="Lừa vàng";
+        replacement.x=200; replacement.y=200; replacement.hp=100; replacement.maxHp=100;
+        MainObject drop=new MainObject(); drop.ID=998; drop.typeObject=4; drop.name="Kim Cương";
+        GameScreen.Vecplayers.addElement(drop);
+        live.tick(replacement,5000); live.tick(replacement,9000);
+        check(live.engine.state==TradeEngine.WAIT_NEW && Player.autoItem!=null,"Wait with auto-pickup enabled while gems remain on ground");
+        drop.isRemove=true; live.tick(replacement,10000); live.tick(replacement,11200);
+        check(live.engine.state==TradeEngine.TO_SELL,"Resume escort after replacement and pickup without requiring cargo count");
+        GameCanvas.loadmap.idMap=8; GameCanvas.loadmap.nameMap=TradeConfig.SELLER_MAP;
+        MainObject graham=new MainObject(); graham.ID=77; graham.typeObject=2; graham.name="Graham";
+        graham.x=200; graham.y=200; GameScreen.Vecplayers.addElement(graham);
+        live.tick(replacement,12000);
+        live.animalCargo("Lừa vàng",1); live.tick(replacement,12500); live.tick(replacement,13000);
+        live.menu(options("Bán hàng"),2,77,""); live.tick(replacement,14000);
+        live.menu(options("Bán tất cả hàng"),3,77,""); live.tick(replacement,15000);
+        check(net.lastNpc==77 && net.lastIndex==0,"Continue sale submenu even after initial sell selection");
+        graham.strChatPopup="Bán hàng thành công"; live.chat(graham); live.tick(replacement,16000);
+        check(live.engine.state==TradeEngine.WAIT_RECALL && live.view.cargo==0,
+            "Graham acknowledgement completes sale and cancels the remaining empty animal");
+        TradeConfig switched=new TradeConfig(); switched.gem=2;
+        live=start(switched); live.engine.gem=2; beast=new MainObject(); beast.ID=70; beast.x=200; beast.y=200;
+        live.tick(beast,3000); live.tick(beast,4000);
+        mVector mixedGoods=goods(); Item sapphire=new Item(); sapphire.Id=82; sapphire.ItemCatagory=4; sapphire.itemName="Saphia";
+        Item ruby=new Item(); ruby.Id=83; ruby.ItemCatagory=4; ruby.itemName="Ruby";
+        mixedGoods.addElement(sapphire); mixedGoods.addElement(ruby);
+        live.shop(mixedGoods,13,11); live.tick(beast,5000);
+        check(net.lastItem==82,"Initial purchase uses sapphire");
+        live.serverText("Mua thành công"); live.tick(beast,5100);
+        live.toggle(5200); switched.gem=1; live.toggle(5300); live.tick(beast,5300);
+        check(live.engine.state==TradeEngine.STOCK && live.view.cargo==1,"Paused partial purchase resumes stock check instead of escort and retains cargo");
+        MainObject switchingMerchant=MainObject.get_Object(5,(byte)2);
+        switchingMerchant.strChatPopup="Kim Cương: 5, Rubi: 5, Saphia: 5";
+        live.chat(switchingMerchant); live.tick(beast,5500); live.tick(beast,5700);
+        live.shop(mixedGoods,13,11); live.tick(beast,5800);
+        int beforeRuby=net.buyCalls;
+        live.tick(beast,8999);
+        check(net.buyCalls==beforeRuby,"Off/on preserves 4s purchase cadence");
+        live.tick(beast,9000);
+        check(net.buyCalls==beforeRuby+1 && net.lastItem==83 && live.engine.gem==1,"Resumed purchase uses newly selected ruby");
+        live.toggle(9100); live.toggle(9200); live.tick(beast,9200);
+        switchingMerchant.strChatPopup="Chỉ còn ngọc trai đen"; live.chat(switchingMerchant); live.tick(beast,9400);
+        check(live.engine.state==TradeEngine.TO_SELL,"Resumed purchase still escorts when all tradable gems are exhausted");
+
+        live=start(); live.tick(beast,3000); live.tick(beast,4000);
+        live.view.full=true; live.toggle(4100); live.toggle(4200); live.tick(beast,4200);
+        check(live.engine.state==TradeEngine.TO_SELL,"Paused full animal cannot resume purchasing");
+        live=start(); live.tick(beast,3000); live.tick(beast,4000); live.toggle(4100);
+        GameCanvas.loadmap.idMap=25; GameCanvas.loadmap.nameMap="Rừng Chết";
+        live.toggle(4200); live.tick(beast,4200);
+        check(live.engine.state==TradeEngine.TO_SELL,"Leaving the buying map invalidates paused purchase resume");
+        switched=new TradeConfig(); switched.gem=1; live=start(switched);
+        live.tick(beast,3000); live.tick(beast,4000); live.shop(mixedGoods,13,11); live.tick(beast,5000);
+        check(net.lastItem==83,"Configured ruby wins over available diamonds");
+        live.serverText("Mua thành công"); live.tick(beast,5100);
+        switched.gem=2; live.tick(beast,5300);
+        check(live.engine.state==TradeEngine.STOCK,"Changing preference while active rechecks stock after pending purchase is acknowledged");
+        switchingMerchant=MainObject.get_Object(5,(byte)2);
+        switchingMerchant.strChatPopup="Kim Cương: 99, Rubi: 99, Saphia: 5";
+        live.chat(switchingMerchant); live.tick(beast,5500); live.tick(beast,5700);
+        live.shop(mixedGoods,13,11); live.tick(beast,5800); live.tick(beast,9000);
+        check(net.lastItem==82 && live.engine.gem==2,"Active preference change purchases sapphire despite diamonds and ruby being available");
+
+        switched=new TradeConfig(); switched.gem=1; live=start(switched);
+        live.tick(beast,3000); live.tick(beast,4000); live.shop(mixedGoods,13,11); live.tick(beast,5000);
+        live.serverText("Hết hàng"); live.tick(beast,5100);
+        switchingMerchant=MainObject.get_Object(5,(byte)2);
+        switchingMerchant.strChatPopup="Kim Cương: 99, Rubi: 0, Saphia: 5";
+        live.chat(switchingMerchant); live.tick(beast,5300); live.tick(beast,5500);
+        live.shop(mixedGoods,13,11); live.tick(beast,5700); live.tick(beast,9000);
+        check(net.lastItem==82 && live.engine.gem==2,"Ruby depletion falls forward to sapphire, never diamonds");
+        live.serverText("Hết hàng"); live.tick(beast,9100);
+        switchingMerchant.strChatPopup="Kim Cương: 99, Rubi: 0, Saphia: 0";
+        live.chat(switchingMerchant); live.tick(beast,9300);
+        check(live.engine.state==TradeEngine.RECALL,"Exhausted ruby and sapphire cancel empty animal when no purchase succeeded");
+        // Exact reported situation: fresh client at Vach Da, ruby configured,
+        // an existing animal, no remembered pause or known capacity.
+        start();
+        GameCanvas.loadmap.idMap=39; GameCanvas.loadmap.nameMap="Vách Đá Cheo Leo";
+        switched=new TradeConfig(); switched.market=2; switched.gem=1; switched.animal=2;
+        live=new LiveTrade(switched,new MapGraph());
+        live.toggle(1000); live.tick(beast,1000);
+        check(live.engine.state==TradeEngine.STOCK,"Fresh start at Vach Da checks stock instead of escorting existing animal");
+        switchingMerchant=MainObject.get_Object(5,(byte)2);
+        switchingMerchant.strChatPopup="Ta chỉ còn 200 viên saphia 171 viên ruby mà thôi, nhanh tay lên kẻo hết";
+        live.chat(switchingMerchant); live.tick(beast,2000); live.tick(beast,2200);
+        live.shop(mixedGoods,13,11); live.tick(beast,2300);
+        check(net.lastItem==83 && live.engine.state==TradeEngine.WAIT_BUY,"Screenshot stock selects and buys ruby with existing animal on cold start");
+        live.view.cargo=6;
+        live.toggle(2400); live.toggle(2500); live.tick(beast,2500);
+        check(live.engine.state==TradeEngine.STOCK && live.view.cargo==6,"Six existing gems do not cause escort when restarting at selected market");
+        // An escort paused before leaving the market must not restart purchases.
+        live=start(); beast=new MainObject(); beast.ID=70; beast.x=200; beast.y=200;
+        live.tick(beast,3000); live.tick(beast,4000);
+        live.engine.state=TradeEngine.TO_SELL; live.view.cargo=6; live.view.full=false;
+        live.toggle(4100);
+        GameCanvas.loadmap.mapW=30; GameCanvas.loadmap.mapH=30; GameCanvas.loadmap.mapType=new int[900];
+        GameScreen.player.x=400; GameScreen.player.y=200;
+        int escortQueries=net.queryCalls, escortShops=net.shopCalls;
+        live.toggle(4200); live.tick(beast,4200);
+        check(live.engine.state==TradeEngine.TO_SELL && live.view.cargo==6,
+            "Paused escort inside buying market resumes escort with partial cargo");
+        check(net.queryCalls==escortQueries && net.shopCalls==escortShops,"Resumed escort never returns to merchant stock/shop");
+        check(GameScreen.player.xStopMove==beast.x && GameScreen.player.yStopMove==beast.y,
+            "Resumed escort first walks back to distant animal");
+        live.toggle(4300); live.tick(null,4400); live.toggle(4500); live.tick(null,4500);
+        check(GameScreen.player.posTransRoad==null && net.queryCalls==escortQueries,
+            "Missing animal after re-enable stops movement and does not query market");
+        live.tick(beast,4600);
+        check(live.engine.state==TradeEngine.TO_SELL && GameScreen.player.xStopMove==beast.x,
+            "Animal appearing later resumes reunion rather than independent travel");
+        live.toggle(4700);
+        GameCanvas.loadmap.idMap=25; GameCanvas.loadmap.nameMap="Rừng Chết";
+        live.toggle(4800); live.tick(beast,4800); live.tick(beast,6500);
+        check(live.engine.state==TradeEngine.TO_SELL && GameScreen.player.xStopMove==beast.x
+            && GameScreen.player.yStopMove==beast.y && net.queryCalls==escortQueries,
+            "Off/on outside market also reunites player and animal before following selling route");
+        String usePrompt="Bạn có muốn sử dụng không ? Thời gian đi buôn còn lại : 4m : 3s";
+        check(TradeSignals.animalUseConfirmation(usePrompt),"Recognize exact screenshot animal-use confirmation");
+        check(!TradeSignals.animalUseConfirmation("Bạn có muốn sử dụng không ?"),"Generic item prompt alone is not trade confirmation");
+        live=start(); live.toggle(2200);
+        GameCanvas.loadmap.idMap=25; GameCanvas.loadmap.nameMap="Rừng Chết";
+        beast=new MainObject(); beast.ID=70; beast.name="Lừa vàng"; beast.hp=10; beast.maxHp=100; beast.x=200; beast.y=200;
+        live.toggle(3000); live.tick(beast,3000);
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,usePrompt,buttons); live.tick(beast,3200);
+        check(ok.calls==1 && live.engine.state==TradeEngine.WAIT_REPLACE,"Auto OK screenshot prompt after replacement item use");
+        live.dialog(dialog,usePrompt,buttons); live.tick(beast,3300);
+        check(ok.calls==1,"Duplicate confirmation is not performed twice");
+        live.tick(null,3500); beast.ID=71; beast.hp=100; live.tick(beast,4000);
+        live.toggle(4100); live.toggle(4200);
+        // A server cargo report explicitly confirms the empty animal outside market.
+        live.view.cargo=0; int emptyUses=net.potionCalls;
+        live.tick(beast,4200);
+        check(live.engine.state==TradeEngine.WAIT_RECALL && net.potionCalls==emptyUses+1,
+            "Empty animal outside market is cancelled with its item instead of escorted");
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,usePrompt,buttons); live.tick(beast,4400);
+        check(ok.calls==1,"Empty-animal cancellation also confirms exact trip-use prompt");
+        live.tick(null,4600);
+        check(live.engine.state==TradeEngine.TO_MARKET && live.engine.market==1 && live.view.cargo==0,
+            "After cancellation return to configured market without rotating or selling");
+        GameCanvas.loadmap.idMap=19; GameCanvas.loadmap.nameMap="Cửa Biển";
+        live.tick(null,5000);
+        switchingMerchant=MainObject.get_Object(5,(byte)2); switchingMerchant.strChatPopup="Kim Cương: 5, Rubi: 5, Saphia: 5";
+        live.chat(switchingMerchant); live.tick(null,5200);
+        check(live.engine.state==TradeEngine.SUMMON,"Normal buying trip restarts on arriving at configured market");
+        // Real cargo-window response, rather than assigning view.cargo in the test.
+        live=start(); live.toggle(2200);
+        GameCanvas.loadmap.idMap=25; GameCanvas.loadmap.nameMap="Rừng Chết";
+        beast=new MainObject(); beast.ID=901; beast.name="Lừa vàng"; beast.x=200; beast.y=200;
+        int cargoRequests=net.menuCalls; emptyUses=net.potionCalls;
+        live.toggle(3000); live.tick(beast,3000);
+        check(net.menuCalls==cargoRequests+1 && GameScreen.player.posTransRoad==null,
+            "Unknown animal cargo requests real inventory and stops escort movement");
+        check(!live.animalCargo("Ngựa trắng",0),"Unrelated mount inventory cannot mark trade animal empty");
+        live.tick(beast,4000);
+        check(net.menuCalls==cargoRequests+1 && net.potionCalls==emptyUses,
+            "Waiting for inventory neither spams request nor cancels unverified animal");
+        check(live.cargoShop(new mVector(),13,11,"Lừa vàng"),"Accept empty cargo window for requested trade animal");
+        live.tick(beast,4200);
+        check(live.view.cargo==0 && live.engine.state==TradeEngine.WAIT_RECALL && net.potionCalls==emptyUses+1,
+            "Real empty inventory cancels animal instead of escorting it");
+        live.tick(null,4400);
+        check(live.engine.state==TradeEngine.TO_MARKET && live.engine.market==1,"Empty inventory cancellation returns to configured buying market");
+        live.toggle(4500); beast.ID=902; live.toggle(4600); live.tick(beast,4600);
+        check(live.cargoShop(sixCargo(),13,11,"Lừa vàng"),"Receive nonempty animal inventory");
+        live.tick(beast,4800);
+        check(live.view.cargo==6 && live.engine.state==TradeEngine.TO_SELL,"Nonempty inventory permits escort without cancelling animal");
+        System.out.println("PASS trade confirmation and purchasing: "+checks+" assertions");
+    }
+}
