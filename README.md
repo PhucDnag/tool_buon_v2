@@ -1,4 +1,4 @@
-﻿# Tool PhucHso — Hệ thống Auto Đi Buôn Hiệp Sĩ Online (HSO)
+# Tool PhucHso — Hệ thống Auto Đi Buôn Hiệp Sĩ Online (HSO)
 
 Bản mod hoàn thiện chức năng **Auto Đi Buôn** (thương nhân) dành cho **Hiệp Sĩ Online v403** chạy trên nền **MicroEmulator**.
 Toàn bộ mã gốc của `KnightOnline_v403.jar` được bảo toàn và chèn các điểm can thiệp bytecode qua ASM (`tools/PatchClient.java`).
@@ -225,8 +225,21 @@ java -jar tools/cfr-0.152.jar tools/microemulator.jar --outputdir tools/decompil
 
 ### Tự nhận diện đường dẫn khi chuyển máy/VPS
 
-Mở `AccountManager_portable.exe` để tự tìm Java và các JAR. Đường dẫn còn hợp lệ được giữ lại; đường dẫn mất hiệu lực được tìm lại khi mở quản lí hoặc khởi chạy game. Có thể bấm **Tự nhận diện** trong Cài đặt để tìm lại toàn bộ.
+Mở `AccountManager.exe` để tự tìm Java và các JAR. Đường dẫn còn hợp lệ được giữ lại; đường dẫn mất hiệu lực được tìm lại khi mở quản lí hoặc khởi chạy game. Có thể bấm **Tự nhận diện** trong Cài đặt để tìm lại toàn bộ.
 
 Chép cả thư mục tool, gồm `tools` và `dist`. Java được tìm trong `runtime\bin\java.exe`, `jre\bin\java.exe`, `java\bin\java.exe`, JAVA_HOME/JRE_HOME, PATH và các thư mục cài đặt thông dụng. Máy chưa có Java cần cài Java hoặc chép một bộ Java portable đầy đủ vào `runtime`; tool không tự tải/cài Java.
 
 JAR trong thư mục tool được lưu bằng đường dẫn tương đối. Khi chưa chọn bản game, quản lí chọn bản `KnightOnline_PhucHso*.jar` mới nhất theo thời gian sửa file, không chọn JAR game gốc chưa mod.
+
+
+### Bản build chuẩn và bảo vệ mật khẩu
+
+Chỉ dùng `AccountManager.exe` và `dist/KnightOnline_PhucHso_v2.jar`; build lại sẽ ghi đè tên cố định. Launcher phụ `tools/manager-launcher.jar` nhận cấu hình bằng stdin, không đưa mật khẩu vào dòng lệnh tiến trình. Khi file đang được sử dụng, đóng ứng dụng tương ứng rồi build lại, không tạo tên phiên bản mới.
+
+Ô mật khẩu trong Sửa tài khoản luôn trống, không có nút xem. Để trống để giữ mật khẩu hiện có; nhập để thay mới. Khi quản lí nạp tài khoản cũ, mật khẩu rõ trong JSON được chuyển sang dữ liệu Windows DPAPI theo người dùng hiện tại. Chuyển sang máy hoặc tài khoản Windows khác cần nhập lại mật khẩu. Cơ chế này ngăn xem mật khẩu trong giao diện và file JSON; không bảo đảm bí mật trước quản trị viên hoặc chương trình chạy dưới cùng tài khoản Windows có thể đọc bộ nhớ/giải mã DPAPI.
+# Quản lý nhiều cửa sổ và bộ nhớ
+
+- **Ẩn tất cả / Hiện tất cả**: ẩn cửa sổ game để chạy nền và hiện lại. Auto và kết nối vẫn hoạt động; phần vẽ hình khi ẩn được giới hạn tối đa 1 lần/giây. F5 trên dòng đang chạy cũng hiện lại game đó. Khi thoát manager mà giữ game, các cửa sổ sẽ được hiện lại.
+- **Tắt tất cả game**: dừng mọi game do manager hiện tại quản lý. **Xếp cửa sổ (F9)** hiện và xếp các game sát nhau trên màn hình chứa manager.
+- **Cài đặt → Thu gom RAM (phút)**: mặc định 10 phút, 0 để tắt, tối đa 120 phút. Áp dụng ngay cho các game đang mở bằng bản mới. Client yêu cầu Java thu gom đối tượng không còn dùng khi auto rảnh; không xóa dữ liệu game hoặc ép Windows đẩy RAM ra đĩa. Việc giảm RAM thực tế phụ thuộc JVM và tải game.
+- **Vàng bán hàng**: cộng số vàng được ghi trong phản hồi bán hàng thành công của auto, lưu theo acc qua các lần mở manager. Tổng là tiền bán hàng, chưa trừ vốn, chỉ bắt đầu ghi nhận từ bản này. Chuyến bán thiếu số tiền rõ ràng được đếm ở mục “Chuyến chưa rõ số vàng”; không ước tính từ biến động ví. Thống kê được gửi về manager mỗi giây; tắt cưỡng bức có thể mất cập nhật cuối cùng.

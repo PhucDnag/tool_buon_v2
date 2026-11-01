@@ -33,21 +33,34 @@ public final class MapLoopRegressionTest {
         enter(nav,19,a,new String[]{b},1000);
         check(GameScreen.player.posTransRoad==null && GameScreen.player.toX==240,"Clear old-map movement immediately on arrival");
         nav.go(target,-1,null,3000);
-        check(GameScreen.player.posTransRoad!=null,"Initially try the route toward Doi Xac Chet");
-        enter(nav,47,b,new String[]{a},4000);
-        nav.go(target,-1,null,6000);
-        check(graph.distance(b,target)==Integer.MAX_VALUE,"Actual portals remove nonexistent seeded shortcut to target");
-        check(GameScreen.player.posTransRoad!=null,"Allow one legitimate retreat from a dead end");
-        enter(nav,19,a,new String[]{b},7000);
-        for (int i=0;i<12;i++) {
-            nav.observe(9000+i*1000); nav.go(target,-1,null,9000+i*1000);
-            check(GameScreen.player.posTransRoad==null,"Never oscillate Cua Bien -> Doi Xac Chet again for same goal");
-        }
-        check(nav.status.indexOf("tránh lặp map")>=0,"Explain why navigation stopped");
-        check(!graph.canUse(a,b),"Repeated observations cannot clear traversal guard");
-        nav.go(b,-1,null,22000);
-        check(GameScreen.player.posTransRoad!=null,"New explicit destination can reuse a previously traversed exit");
+        check(GameScreen.player.posTransRoad==null,"Unknown map cannot follow cached speculative route");
+        check(nav.status.indexOf("không dò đường")>=0,"Explain missing approved route");
+        nav.go(b,-1,null,4000);
+        check(GameScreen.player.posTransRoad!=null,"A physical exit directly to requested destination is a complete known route");
 
+        // Complete city-to-hell route must work on first launch, without learning.
+        String[] cityRoute={"Thành Phố Kho Báu","Khu phía Tây","Sa Mạc","Hố Tử Thần",
+            "Nghĩa Địa Cát","Vực Lún","Đèo Hoang Sơ","Đường Xuống Lòng Đất",
+            "Cây Cầu Ma Ám","Cổng vào Hạ Giới","Cổng Địa Ngục"};
+        graph=new MapGraph(); nav=new Navigator(graph);
+        for (int i=0;i<cityRoute.length-1;i++) {
+            graph.add("Cánh Đồng Sói",target,0,0);
+            graph.add(cityRoute[i],"Cánh Đồng Sói",0,0);
+            long at=200000+i*4000;
+            enter(nav,300+i,cityRoute[i],new String[]{"Cánh Đồng Sói",cityRoute[i+1],"Cửa Biển"},at);
+            nav.go(target,52,null,at+2000);
+            check(nav.status.equals("Đi tới "+cityRoute[i+1]) && GameScreen.player.xStopMove==144,
+                "First journey follows approved hop from "+cityRoute[i]);
+        }
+        nav=new Navigator(new MapGraph());
+        enter(nav,33,"Thành Phố Kho Báu",new String[]{"Rừng Chết","Khu phía Đông"},250000);
+        for (int i=0;i<10;i++) {
+            nav.go(target,52,null,252000+i*1000);
+            check(GameScreen.player.posTransRoad==null && nav.status.indexOf("không dò đường")>=0,
+                "Missing west exit never triggers exploration, including repeated retries");
+        }
+        check(KnownRoutes.next("Nghĩa Địa Cát","Vách Đá Cheo Leo").equals("doi cat"),
+            "Cliff route also uses approved desert branch");
         // The entire observed hell corridor wins over even shorter stale cache links.
         graph=new MapGraph(); nav=new Navigator(graph);
         graph.add("Đồi Xác Chết", "Cổng vào Hạ Giới", 24,24);
@@ -67,7 +80,7 @@ public final class MapLoopRegressionTest {
         nav=new Navigator(new MapGraph());
         enter(nav,24,"Nghĩa Địa Cát",new String[]{"Cửa Biển","Đồi Cát"},49000);
         nav.go(target,-1,null,51000);
-        check(GameScreen.player.posTransRoad==null && nav.status.indexOf("Vực Lún")>=0,
+        check(GameScreen.player.posTransRoad==null && nav.status.indexOf("vuc lun")>=0,
             "Missing Vuc Lun portal never falls back to sea detour");
 
         // Verified absence of a portal survives save/load and seed installation.
@@ -96,7 +109,7 @@ public final class MapLoopRegressionTest {
         nav=new Navigator(new MapGraph());
         enter(nav,24,"Nghĩa Địa Cát",new String[]{"Đồi Cát","Cửa Biển"},56000);
         nav.go(TradeConfig.SELLER_MAP,-1,animal,58000);
-        check(GameScreen.player.posTransRoad==null && nav.status.indexOf("Hố Tử Thần")>=0,"Missing required portal stops escort instead of selecting wrong route");
+        check(GameScreen.player.posTransRoad==null && nav.status.indexOf("ho tu than")>=0,"Missing required portal stops escort instead of selecting wrong route");
         // Market-bound navigation still uses its own route.
         nav.go("Cửa Biển",-1,animal,59000);
         check(nav.status.equals("Đi tới Cửa Biển"),"Selling corridor does not affect the return trip to market");
@@ -231,7 +244,7 @@ public final class MapLoopRegressionTest {
         for (int y=0;y<14;y++) GameCanvas.loadmap.mapType[y*20+11]=1;
         GameScreen.ObjFocus=animal;
         nav.walk(348,252,0,animal,192000);
-        check(GameScreen.ObjFocus==null,"Clear focus on owned animal during escort");
+        check(GameScreen.ObjFocus==animal,"Escort preserves manual animal selection for inventory access");
         short[] escortRoad=GameScreen.player.posTransRoad;
         check(escortRoad!=null && escortRoad.length>3,"Escort keeps full winding road around wall");
         int prevX=10,prevY=10;
@@ -247,6 +260,26 @@ public final class MapLoopRegressionTest {
         GameScreen.ObjFocus=npc;
         nav.walk(348,252,0,animal,192100);
         check(GameScreen.ObjFocus==npc,"Do not clear unrelated NPC focus");
+        String[] forest={"Rừng Ảo Giác","Hang Lửa","Bìa Rừng","Làng Sói Trắng","Cánh Đồng Sói",
+            "Hang Sói Quỷ","Rừng Chết","Thành Phố Kho Báu","Khu phía Tây","Sa Mạc","Hố Tử Thần",
+            "Nghĩa Địa Cát","Vực Lún","Đèo Hoang Sơ","Đường Xuống Lòng Đất","Cây Cầu Ma Ám",
+            "Cổng vào Hạ Giới","Cổng Địa Ngục"};
+        nav=new Navigator(new MapGraph());
+        for(int i=0;i<forest.length-1;i++) {
+            long at=300000+i*4000;
+            enter(nav,400+i,forest[i],new String[]{i==0?"Khe Vực":forest[i-1],forest[i+1]},at);
+            nav.go(target,52,null,at+2000);
+            check(GameScreen.player.xStopMove==144 && nav.status.equals("Đi tới "+forest[i+1]),
+                "Compute complete forest-to-hell route: "+forest[i]);
+        }
+        nav=new Navigator(new MapGraph());
+        enter(nav,999,"Map mới",new String[]{"Ngõ cụt chưa biết","Rừng Ảo Giác","Hang Sói Quỷ"},380000);
+        nav.go(target,52,null,382000);
+        check(GameScreen.player.xStopMove==240 && nav.status.equals("Đi tới Hang Sói Quỷ"),
+            "Unlisted origin picks shortest fully connected exit, not first unexplored portal");
+        check(KnownRoutes.next("Khe Vực",target).equals("rung ao giac"),"Dead-end forest branch returns to world network");
+        check(KnownRoutes.next("Hầm Mộ Tầng 3",target)!=null,"Dungeon branch joins trading network");
+        check(KnownRoutes.next("Nghĩa Địa Tàu Đắm",target)!=null,"Coastal branch joins trading network");
         System.out.println("PASS map-loop regression: "+checks+" assertions");
     }
 }

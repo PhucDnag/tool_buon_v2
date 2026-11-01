@@ -178,6 +178,17 @@ public final class TradeTests {
         check(p.buys==1 && e.state==TradeEngine.WAIT_BUY && !v.full,"Local estimated capacity cannot end purchases before server says full");
         v.full=true; e.tick(v,2000);
         check(e.state==TradeEngine.TO_SELL,"Server full flag still ends purchases immediately");
+        int[] lowStates={TradeEngine.WAIT_BUY,TradeEngine.STOCK};
+        for(int i=0;i<lowStates.length;i++) {
+            p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
+            v.animal=true; v.hp=10; v.maxHp=100; v.cargo=2; e.state=lowStates[i];
+            e.tick(v,2000);
+            check(e.state==TradeEngine.WAIT_REPLACE,"Low HP triggers replacement while waiting for buy/stock response");
+            v.animal=false; e.tick(v,3000);
+            check(e.state==TradeEngine.WAIT_NEW,"Replacement waits for new animal");
+            v.animal=true; v.hp=100; e.tick(v,8000);
+            check(e.state==TradeEngine.TO_MARKET,"After replacement recheck market instead of waiting on obsolete buy request");
+        }
         System.out.println("PASS "+checks+" assertions");
     }
 }

@@ -99,6 +99,7 @@ namespace PhucHsoManager
         public string GameJar { get; set; }
         public int LaunchDelaySeconds { get; set; }
         public bool RenameWindowTitle { get; set; }
+        public int MemoryCleanupMinutes { get; set; }
 
         public AppSettings()
         {
@@ -107,6 +108,7 @@ namespace PhucHsoManager
             GameJar = "";
             LaunchDelaySeconds = 2;
             RenameWindowTitle = true;
+            MemoryCleanupMinutes = 10;
         }
 
         public static string SettingsFile
@@ -137,7 +139,8 @@ namespace PhucHsoManager
             string root = AppDomain.CurrentDomain.BaseDirectory;
             JavaPath = RuntimePaths.FindJava(root, JavaPath);
             EmulatorJar = RuntimePaths.FindJar(root, EmulatorJar, false);
-            GameJar = RuntimePaths.FindJar(root, GameJar, true);
+            string canonical = RuntimePaths.Existing(root, @"dist\KnightOnline_PhucHso_v2.jar");
+            GameJar = canonical.Length > 0 ? @"dist\KnightOnline_PhucHso_v2.jar" : RuntimePaths.FindJar(root, GameJar, true);
         }
 
         public void Save()
@@ -154,11 +157,40 @@ namespace PhucHsoManager
 
     public class AccountItem
     {
+        public static string NewProfileId() { return "acc_" + Guid.NewGuid().ToString("N"); }
+
+        public static void EnsureUniqueProfiles(IEnumerable<AccountItem> items)
+        {
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (AccountItem item in items)
+            {
+                if (string.IsNullOrEmpty(item.Id) ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(item.Id, @"\A[A-Za-z0-9_-]+\z") ||
+                    !used.Add(item.Id))
+                {
+                    do { item.Id = NewProfileId(); } while (!used.Add(item.Id));
+                }
+            }
+        }
+
         public bool Selected { get; set; }
         public string Id { get; set; }
         public string DisplayName { get; set; }
         public string Username { get; set; }
-        public string Password { get; set; }
+        // Write-only compatibility with legacy accounts.json; never serialize plaintext.
+        public string Password {
+            get { return ""; }
+            set { if (!string.IsNullOrEmpty(value)) PasswordProtected = Convert.ToBase64String(
+                System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser)); }
+        }
+        public string PasswordProtected { get; set; }
+        public string ReadPassword() {
+            if (string.IsNullOrEmpty(PasswordProtected)) return "";
+            try { return Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(
+                Convert.FromBase64String(PasswordProtected), null, System.Security.Cryptography.DataProtectionScope.CurrentUser)); }
+            catch { throw new InvalidOperationException("Không giải mã được mật khẩu trên máy/tài khoản Windows này. Hãy nhập mật khẩu mới trong Sửa tài khoản."); }
+        }
         public string Server { get; set; }
         public int CharacterSlot { get; set; }
         public int Market { get; set; }
@@ -182,6 +214,23 @@ namespace PhucHsoManager
         public int HealMpPercent { get; set; }
         public string MountName { get; set; }
         public string Notes { get; set; }
+        public long TradeGold { get; set; }
+        public long UnmeasuredSales { get; set; }
+        [ScriptIgnore] public long SessionGold { get; set; }
+        [ScriptIgnore] public long SessionUnmeasured { get; set; }
+        [ScriptIgnore] public bool Background { get; set; }
+        public bool ReadTradeSnapshot(string text)
+        {
+            string[] parts = text.Trim().Split(':');
+            long gold, unknown;
+            if (parts.Length != 2 || !long.TryParse(parts[0], out gold) || !long.TryParse(parts[1], out unknown)
+                || gold < SessionGold || unknown < SessionUnmeasured || gold < 0 || unknown < 0) return false;
+            long delta = gold - SessionGold, missing = unknown - SessionUnmeasured;
+            if (delta > long.MaxValue - TradeGold || missing > long.MaxValue - UnmeasuredSales) return false;
+            TradeGold += delta; UnmeasuredSales += missing;
+            SessionGold = gold; SessionUnmeasured = unknown;
+            return delta != 0 || missing != 0;
+        }
 
         [ScriptIgnore]
         public Process Process { get; set; }
@@ -204,7 +253,7 @@ namespace PhucHsoManager
         public AccountItem()
         {
             Selected = true;
-            Id = "acc1";
+            Id = NewProfileId();
             DisplayName = "Tài khoản 1";
             Username = "";
             Password = "";
@@ -265,6 +314,8 @@ namespace PhucHsoManager
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        public static extern bool IsWindow(IntPtr hWnd);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
@@ -309,7 +360,7 @@ namespace PhucHsoManager
     {
         private TextBox txtUsername, txtPassword;
         private ComboBox cmbServer, cmbSlot, cmbMarket, cmbGem, cmbAnimal, cmbHp;
-        private CheckBox chkShowPass, chkAutoTrade, chkAutoRecon, chkAutoMount, chkAutoRestart;
+        private CheckBox chkAutoTrade, chkAutoRecon, chkAutoMount, chkAutoRestart;
         private Button btnOk, btnCancel;
 
         private readonly Dictionary<string, CheckBox> extraSettings = new Dictionary<string, CheckBox>();
@@ -319,7 +370,7 @@ namespace PhucHsoManager
         public AccountItem Account { get; private set; }
 
         public static readonly string[] ServerList = new string[] {
-            "Chiến Thần", "Rồng Lửa", "Phượng Hoàng", "Nhân Mã", "Kì Lân", "Thiên Hà", "Thách Đấu", "Global Server"
+            "Chiến Thần", "Rồng Lửa", "Phượng Hoàng", "Nhân Mã", "Kì Lân", "Thiên Hà", "Bạch Hổ", "Thách Đấu", "Global Server"
         };
         public static readonly string[] MarketList = new string[] { "Cổng Địa Ngục", "Cửa Biển", "Vách Đá Cheo Leo" };
         public static readonly string[] GemList = new string[] { "Kim Cương", "Rubi", "Saphia" };
@@ -401,10 +452,10 @@ namespace PhucHsoManager
 
             y += gap;
             Label lblPass = new Label { Text = "Mật khẩu:", Left = labelX, Top = y + 3, Width = 120 };
-            txtPassword = new TextBox { Left = inputX, Top = y, Width = inputW - 75, Text = Account.Password, UseSystemPasswordChar = true };
-            chkShowPass = new CheckBox { Text = "Hiện", Left = inputX + inputW - 70, Top = y + 2, Width = 65 };
-            chkShowPass.CheckedChanged += delegate { txtPassword.UseSystemPasswordChar = !chkShowPass.Checked; };
-            tab1.Controls.AddRange(new Control[] { lblPass, txtPassword, chkShowPass });
+            txtPassword = new TextBox { Left = inputX, Top = y, Width = inputW, Text = "", UseSystemPasswordChar = true };
+            tab1.Controls.AddRange(new Control[] { lblPass, txtPassword });
+            tab1.Controls.Add(new Label { Text = "Để trống: giữ mật khẩu đã lưu. Nhập để thay mới.", Left = inputX, Top = y + 24, Width = inputW, Height = 18 });
+            y += 14;
 
             y += gap;
             Label lblServer = new Label { Text = "Máy chủ:", Left = labelX, Top = y + 3, Width = 120 };
@@ -567,7 +618,7 @@ namespace PhucHsoManager
 
             Account.DisplayName = !string.IsNullOrEmpty(user) ? user : Account.Id;
             Account.Username = user;
-            Account.Password = txtPassword.Text;
+            if (txtPassword.Text.Length > 0) Account.Password = txtPassword.Text;
             Account.Server = cmbServer.Text.Trim();
             Account.CharacterSlot = chosenSlot;
 
@@ -600,7 +651,7 @@ namespace PhucHsoManager
     public class SettingsDialog : Form
     {
         private TextBox txtJava, txtEmulator, txtGame;
-        private NumericUpDown numDelay;
+        private NumericUpDown numDelay, numCleanup;
         private CheckBox chkRename;
         private Button btnOk, btnCancel;
         public AppSettings Settings { get; private set; }
@@ -615,7 +666,7 @@ namespace PhucHsoManager
         {
             Text = "Cài đặt đường dẫn & Khởi chạy";
             Width = 560;
-            Height = 330;
+            Height = 390;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -661,6 +712,13 @@ namespace PhucHsoManager
             };
             Controls.Add(chkRename);
 
+            y += gap;
+            numCleanup = new NumericUpDown { Left = ix, Top = y, Width = 80, Minimum = 0, Maximum = 120,
+                Value = Math.Max(0, Math.Min(120, Settings.MemoryCleanupMinutes)) };
+            Controls.Add(new Label { Text = "Thu gom RAM (phút):", Left = lx, Top = y + 3, Width = 135 });
+            Controls.Add(numCleanup);
+            Controls.Add(new Label { Text = "0: tắt; chờ lúc auto rảnh để thu gom.", Left = ix + 90, Top = y + 3, Width = 260 });
+
             y += gap + 5;
             btnOk = new Button
             {
@@ -680,6 +738,7 @@ namespace PhucHsoManager
                 Settings.GameJar = txtGame.Text.Trim();
                 Settings.LaunchDelaySeconds = (int)numDelay.Value;
                 Settings.RenameWindowTitle = chkRename.Checked;
+                Settings.MemoryCleanupMinutes = (int)numCleanup.Value;
                 Settings.DetectPaths();
                 Settings.Save();
                 DialogResult = DialogResult.OK;
@@ -708,6 +767,21 @@ namespace PhucHsoManager
         }
     }
 
+    public static class WindowLayout
+    {
+        public static Rectangle[] Arrange(Rectangle area, int count)
+        {
+            if (count <= 0) return new Rectangle[0];
+            int cols = Math.Min(count, Math.Max(1, area.Width / 310));
+            int rows = (count + cols - 1) / cols;
+            int width = Math.Min(310, area.Width / cols), height = Math.Min(410, area.Height / rows);
+            var result = new Rectangle[count];
+            int left = area.Left + (area.Width - cols * width) / 2;
+            for (int i = 0; i < count; i++) result[i] = new Rectangle(left + (i % cols) * width, area.Top + (i / cols) * height, width, height);
+            return result;
+        }
+    }
+
     public class MainForm : Form
     {
         private List<AccountItem> accounts = new List<AccountItem>();
@@ -716,6 +790,8 @@ namespace PhucHsoManager
         private ToolStripStatusLabel lblStatus, lblSummary;
         private System.Windows.Forms.Timer updateTimer;
         private bool isBatchLaunching = false;
+        private bool allHidden;
+        private ToolStripStatusLabel lblGold;
 
         private static string AccountsFile
         {
@@ -769,7 +845,7 @@ namespace PhucHsoManager
             Panel pnlToolbar = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 94,
+                Height = 138,
                 BackColor = Color.FromArgb(245, 246, 248)
             };
 
@@ -793,6 +869,15 @@ namespace PhucHsoManager
                 WrapContents = false
             };
 
+            FlowLayoutPanel windowTools = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8, 2, 8, 2), AutoScroll = true, WrapContents = false };
+            Button hideAll = CreateButton("Ẩn tất cả", Color.White, Color.Black);
+            hideAll.Click += delegate { SetAllVisible(false); };
+            Button showAll = CreateButton("Hiện tất cả", Color.White, Color.Black);
+            showAll.Click += delegate { SetAllVisible(true); };
+            Button stopAll = CreateButton("Tắt tất cả game", Color.White, Color.Black);
+            stopAll.Click += delegate { StopAll(); };
+            windowTools.Controls.AddRange(new Control[] { hideAll, showAll, stopAll });
+            pnlToolbar.Controls.Add(windowTools);
             pnlToolbar.Controls.Add(toolbarRow2);
             pnlToolbar.Controls.Add(toolbarRow1);
 
@@ -909,7 +994,7 @@ namespace PhucHsoManager
             {
                 HeaderText = "Mật khẩu",
                 Width = 65,
-                DataPropertyName = "Password",
+                DataPropertyName = "",
                 ReadOnly = true
             };
 
@@ -975,6 +1060,8 @@ namespace PhucHsoManager
             dgvAccounts.Columns.AddRange(new DataGridViewColumn[] {
                 colSelect, colId, colDisplayName, colUser, colPass, colServer, colSlot, colTrade, colAutoTrade, colRestart, colStatus, colUptime, colNotes
             });
+            dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "TradeGold", HeaderText = "Vàng bán hàng", DataPropertyName = "TradeGold", ReadOnly = true, Width = 130,
+                DefaultCellStyle = new DataGridViewCellStyle { Format = "N0" } });
 
             // Keep secondary settings in the edit dialog; preserve column indices.
             colId.Visible = colDisplayName.Visible = colPass.Visible = colTrade.Visible = colRestart.Visible = colNotes.Visible = false;
@@ -1008,6 +1095,8 @@ namespace PhucHsoManager
             };
 
             dgvAccounts.CellFormatting += DgvAccounts_CellFormatting;
+            dgvAccounts.SelectionChanged += delegate { ShowSelectedAccount(); };
+            dgvAccounts.CurrentCellChanged += delegate { ShowSelectedAccount(); };
             dgvAccounts.CellDoubleClick += delegate (object sender, DataGridViewCellEventArgs e) { if (e.RowIndex >= 0) EditSelected(); };
 
             // Context Menu
@@ -1033,6 +1122,9 @@ namespace PhucHsoManager
             lblStatus = new ToolStripStatusLabel { Text = "Sẵn sàng", Spring = true, TextAlign = ContentAlignment.MiddleLeft };
             lblSummary = new ToolStripStatusLabel { Text = "Tổng: 0 nick | Đang chạy: 0" };
             statusStrip.Items.AddRange(new ToolStripItem[] { lblStatus, lblSummary });
+            StatusStrip goldStrip = new StatusStrip { Dock = DockStyle.Bottom, SizingGrip = false };
+            lblGold = new ToolStripStatusLabel { Text = "Tổng vàng bán hàng: 0 (chưa trừ vốn)" };
+            goldStrip.Items.Add(lblGold);
 
             Panel tableContainer = new Panel
             {
@@ -1045,6 +1137,7 @@ namespace PhucHsoManager
             Controls.Add(tableContainer);
             Controls.Add(pnlToolbar);
             Controls.Add(statusStrip);
+            Controls.Add(goldStrip);
 
             KeyPreview = true;
             KeyDown += MainForm_KeyDown;
@@ -1096,21 +1189,24 @@ namespace PhucHsoManager
         {
             int runningCount = 0;
             DateTime now = DateTime.Now;
+            bool statisticsChanged = false;
 
             foreach (var acc in accounts)
             {
+                statisticsChanged |= ReadStatistics(acc);
                 if (acc.IsRunning)
                 {
                     runningCount++;
 
                     // Find window and set custom title
-                    if (settings.RenameWindowTitle && acc.WindowHandle == IntPtr.Zero)
+                    if (acc.WindowHandle == IntPtr.Zero)
                     {
                         acc.WindowHandle = Win32.FindMainWindow(acc.Process.Id);
                         if (acc.WindowHandle != IntPtr.Zero)
                         {
                             string title = string.Format("Knight Online [{0}] - {1} ({2})", acc.Id, acc.DisplayName, FormatSlot(acc.CharacterSlot));
-                            Win32.SetWindowText(acc.WindowHandle, title);
+                            if (settings.RenameWindowTitle) Win32.SetWindowText(acc.WindowHandle, title);
+                            if (acc.Background) Win32.ShowWindow(acc.WindowHandle, 0);
                         }
                     }
                 }
@@ -1137,6 +1233,11 @@ namespace PhucHsoManager
 
             lblSummary.Text = string.Format("Tổng: {0} nick | Đang chạy: {1} | Đã chọn: {2}",
                 accounts.Count, runningCount, accounts.FindAll(delegate (AccountItem a) { return a.Selected; }).Count);
+            if (statisticsChanged) SaveAccounts();
+            decimal totalGold = 0, unmeasured = 0;
+            foreach (var acc in accounts) { totalGold += acc.TradeGold; unmeasured += acc.UnmeasuredSales; }
+            lblGold.Text = string.Format("Tổng vàng bán hàng: {0:N0} (chưa trừ vốn) | Chuyến chưa rõ số vàng: {1:N0}", totalGold, unmeasured);
+            dgvAccounts.InvalidateColumn(13);
 
             dgvAccounts.InvalidateColumn(10);
             dgvAccounts.InvalidateColumn(11);
@@ -1144,8 +1245,9 @@ namespace PhucHsoManager
 
         private void DgvAccounts_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.RowIndex >= accounts.Count) return;
-            AccountItem acc = accounts[e.RowIndex];
+            if (e.RowIndex < 0 || e.RowIndex >= dgvAccounts.Rows.Count) return;
+            AccountItem acc = dgvAccounts.Rows[e.RowIndex].DataBoundItem as AccountItem;
+            if (acc == null) return;
 
             // Password mask (col index 4)
             if (e.ColumnIndex == 4 && e.Value != null)
@@ -1173,7 +1275,6 @@ namespace PhucHsoManager
                 {
                     e.Value = string.Format("● Đang chạy ({0})", acc.Process.Id);
                     e.CellStyle.ForeColor = Color.FromArgb(46, 125, 50);
-                    e.CellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
                 }
                 else
                 {
@@ -1202,9 +1303,33 @@ namespace PhucHsoManager
         private AccountItem GetSelectedAccount()
         {
             if (dgvAccounts.SelectedRows.Count == 0) return null;
-            int idx = dgvAccounts.SelectedRows[0].Index;
-            if (idx >= 0 && idx < accounts.Count) return accounts[idx];
-            return null;
+            return dgvAccounts.SelectedRows[0].DataBoundItem as AccountItem;
+        }
+
+        private void ShowSelectedAccount()
+        {
+            if (lblStatus == null) return;
+            AccountItem acc = GetSelectedAccount();
+            lblStatus.Text = acc == null ? "Chưa chọn dòng tài khoản" : string.Format(
+                "Đang chọn: {0} | {1} | {2} | {3}",
+                string.IsNullOrEmpty(acc.Username) ? acc.DisplayName : acc.Username,
+                acc.Server, FormatSlot(acc.CharacterSlot),
+                acc.IsRunning ? "PID: " + acc.Process.Id : "Chưa mở game");
+        }
+
+        private void FocusAccountWindow(AccountItem acc)
+        {
+            // Resolve from this row's process every time; never reuse a stale HWND.
+            if (!acc.IsRunning) return;
+            acc.WindowHandle = AccountWindow(acc);
+            acc.Background = false;
+            WriteRuntimeSettings(acc);
+            if (acc.WindowHandle != IntPtr.Zero)
+            {
+                Win32.ShowWindow(acc.WindowHandle, Win32.SW_RESTORE);
+                Win32.SetForegroundWindow(acc.WindowHandle);
+            }
+            ShowSelectedAccount();
         }
 
         private void LaunchSelected()
@@ -1215,7 +1340,8 @@ namespace PhucHsoManager
                 MessageBox.Show("Vui lòng chọn một tài khoản để mở!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            LaunchProcess(acc);
+            if (acc.IsRunning) FocusAccountWindow(acc);
+            else LaunchProcess(acc);
         }
 
         private void LaunchChecked()
@@ -1300,6 +1426,11 @@ namespace PhucHsoManager
             catch { }
         }
 
+        private static void WriteLaunchProperty(StreamWriter writer, string key, string value)
+        {
+            writer.WriteLine(key + "=" + BitConverter.ToString(Encoding.UTF8.GetBytes(value ?? "")).Replace("-", ""));
+        }
+
         private void LaunchProcess(AccountItem acc)
         {
             if (acc.IsRunning) return;
@@ -1345,6 +1476,9 @@ namespace PhucHsoManager
                 string controlDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "control");
                 Directory.CreateDirectory(controlDir);
                 acc.ControlFile = Path.Combine(controlDir, Guid.NewGuid().ToString("N") + ".cmd");
+                acc.SessionGold = acc.SessionUnmeasured = 0;
+                acc.Background = allHidden;
+                WriteRuntimeSettings(acc);
                 vmArgs.Add("-Dphuc.control=\"" + acc.ControlFile + "\"");
                 vmArgs.Add(string.Format("-Duser.home=\"{0}\"", userHome));
 
@@ -1386,15 +1520,15 @@ namespace PhucHsoManager
                 if (!string.IsNullOrEmpty(acc.Username))
                     vmArgs.Add(string.Format("-Dphuc.user=\"{0}\"", acc.Username));
 
-                if (!string.IsNullOrEmpty(acc.Password))
-                    vmArgs.Add(string.Format("-Dphuc.pass=\"{0}\"", acc.Password));
-
-                string fullVmArgs = string.Join(" ", vmArgs.ToArray());
+                string password = acc.ReadPassword();
+                string launcher = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools", "manager-launcher.jar");
+                if (!File.Exists(launcher)) throw new FileNotFoundException("Thiếu tools/manager-launcher.jar. Hãy build lại bộ tool.");
 
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = javaExe,
-                    Arguments = string.Format("{0} -jar \"{1}\" --resizableDevice 300 300 --id \"{2}\" \"{3}\"", fullVmArgs, microJar, acc.Id, gameJar),
+                    Arguments = "-cp \"" + launcher + ";" + microJar + "\" ManagerLauncher --resizableDevice 300 300 --id \"" + acc.Id + "\" \"" + gameJar + "\"",
+                    RedirectStandardInput = true,
                     WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -1402,6 +1536,14 @@ namespace PhucHsoManager
                 };
 
                 Process p = Process.Start(psi);
+                try {
+                    foreach (string option in vmArgs) {
+                        int eq = option.IndexOf('=');
+                        WriteLaunchProperty(p.StandardInput, option.Substring(2, eq - 2), option.Substring(eq + 1).Trim('"'));
+                    }
+                    WriteLaunchProperty(p.StandardInput, "phuc.pass", password);
+                    p.StandardInput.Close();
+                } catch { try { p.Kill(); } catch { } throw; }
                 acc.Process = p;
                 acc.StartTime = DateTime.Now;
                 acc.UserStopped = false;
@@ -1470,6 +1612,7 @@ namespace PhucHsoManager
 
         private void StopAccount(AccountItem acc)
         {
+            ReadStatistics(acc);
             acc.UserStopped = true;
             if (acc.IsRunning)
             {
@@ -1483,6 +1626,7 @@ namespace PhucHsoManager
             acc.WindowHandle = IntPtr.Zero;
             lblStatus.Text = string.Format("Đã dừng tài khoản: {0}", acc.DisplayName);
             dgvAccounts.Refresh();
+            SaveAccounts();
         }
 
         private void RestartSelected()
@@ -1494,14 +1638,56 @@ namespace PhucHsoManager
             LaunchProcess(acc);
         }
 
+        private IntPtr AccountWindow(AccountItem acc)
+        {
+            if (!acc.IsRunning) return IntPtr.Zero;
+            uint pid;
+            if (acc.WindowHandle != IntPtr.Zero && Win32.IsWindow(acc.WindowHandle)) {
+                Win32.GetWindowThreadProcessId(acc.WindowHandle, out pid);
+                if (pid == acc.Process.Id) return acc.WindowHandle;
+            }
+            return acc.WindowHandle = Win32.FindMainWindow(acc.Process.Id);
+        }
+
+        private bool ReadStatistics(AccountItem acc)
+        {
+            if (string.IsNullOrEmpty(acc.ControlFile)) return false;
+            try {
+                string path = acc.ControlFile + ".stats";
+                return File.Exists(path) && acc.ReadTradeSnapshot(File.ReadAllText(path));
+            } catch (IOException) { return false; }
+        }
+
+        private void WriteRuntimeSettings(AccountItem acc)
+        {
+            if (string.IsNullOrEmpty(acc.ControlFile)) return;
+            string target = acc.ControlFile + ".runtime", temp = target + ".tmp";
+            File.WriteAllText(temp, (acc.Background ? "1:" : "0:") + Math.Max(0, Math.Min(120, settings.MemoryCleanupMinutes)), Encoding.ASCII);
+            if (File.Exists(target)) File.Replace(temp, target, null); else File.Move(temp, target);
+        }
+
+        private void SetAllVisible(bool visible)
+        {
+            allHidden = !visible;
+            foreach (var acc in accounts) {
+                if (!acc.IsRunning) continue;
+                IntPtr handle = AccountWindow(acc);
+                acc.Background = !visible;
+                WriteRuntimeSettings(acc);
+                if (handle != IntPtr.Zero) Win32.ShowWindow(handle, visible ? Win32.SW_RESTORE : 0);
+            }
+            lblStatus.Text = visible ? "Đã hiện tất cả game." : "Đã ẩn tất cả game; auto vẫn chạy nền.";
+        }
+
         private void TileWindows()
         {
+            SetAllVisible(true);
             List<IntPtr> handles = new List<IntPtr>();
             foreach (var acc in accounts)
             {
                 if (acc.IsRunning)
                 {
-                    if (acc.WindowHandle == IntPtr.Zero) acc.WindowHandle = Win32.FindMainWindow(acc.Process.Id);
+                    acc.WindowHandle = AccountWindow(acc);
                     if (acc.WindowHandle != IntPtr.Zero) handles.Add(acc.WindowHandle);
                 }
             }
@@ -1512,38 +1698,19 @@ namespace PhucHsoManager
                 return;
             }
 
-            Rectangle screen = Screen.PrimaryScreen.WorkingArea;
+            Rectangle screen = Screen.FromControl(this).WorkingArea;
             int count = handles.Count;
-            int cols, rows;
-
-            if (count == 1) { cols = 1; rows = 1; }
-            else if (count == 2) { cols = 2; rows = 1; }
-            else if (count <= 4) { cols = 2; rows = 2; }
-            else if (count <= 6) { cols = 3; rows = 2; }
-            else if (count <= 8) { cols = 4; rows = 2; }
-            else if (count <= 9) { cols = 3; rows = 3; }
-            else
-            {
-                cols = (int)Math.Ceiling(Math.Sqrt(count));
-                rows = (int)Math.Ceiling((double)count / cols);
-            }
-
-            int cellW = screen.Width / cols;
-            int cellH = screen.Height / rows;
+            Rectangle[] layout = WindowLayout.Arrange(screen, count);
 
             for (int i = 0; i < count; i++)
             {
                 IntPtr h = handles[i];
                 Win32.ShowWindow(h, Win32.SW_RESTORE);
-                int r = i / cols;
-                int c = i % cols;
-                int x = screen.Left + c * cellW;
-                int y = screen.Top + r * cellH;
-                Win32.MoveWindow(h, x, y, cellW, cellH, true);
-                Win32.SetForegroundWindow(h);
+                Rectangle box = layout[i];
+                Win32.MoveWindow(h, box.X, box.Y, box.Width, box.Height, true);
             }
 
-            lblStatus.Text = string.Format("Đã sắp xếp {0} cửa sổ thành lưới {1}x{2}.", count, cols, rows);
+            lblStatus.Text = string.Format("Đã xếp sát {0} cửa sổ trên màn hình hiện tại.", count);
         }
 
         private void OpenRmsFolder()
@@ -1560,7 +1727,7 @@ namespace PhucHsoManager
 
         private void AddAccount()
         {
-            string newId = "acc" + (accounts.Count + 1);
+            string newId = AccountItem.NewProfileId();
             AccountItem item = new AccountItem
             {
                 Id = newId,
@@ -1611,19 +1778,14 @@ namespace PhucHsoManager
             AccountItem acc = GetSelectedAccount();
             if (acc == null) return;
 
-            string copyId = acc.Id + "_copy";
-            int counter = 1;
-            while (accounts.Exists(delegate (AccountItem a) { return a.Id == copyId; }))
-            {
-                copyId = acc.Id + "_copy" + counter++;
-            }
+            string copyId = AccountItem.NewProfileId();
 
             AccountItem dup = new AccountItem
             {
                 Id = copyId,
                 DisplayName = acc.DisplayName + " (Copy)",
                 Username = acc.Username,
-                Password = acc.Password,
+                PasswordProtected = acc.PasswordProtected,
                 Server = acc.Server,
                 CharacterSlot = acc.CharacterSlot,
                 Market = acc.Market,
@@ -1681,6 +1843,7 @@ namespace PhucHsoManager
                 if (dlg.ShowDialog() == DialogResult.OK)
                 {
                     lblStatus.Text = "Đã lưu cài đặt mới.";
+                    foreach (var acc in accounts) if (acc.IsRunning) WriteRuntimeSettings(acc);
                 }
             }
         }
@@ -1704,6 +1867,8 @@ namespace PhucHsoManager
                     if (list != null && list.Count > 0)
                     {
                         accounts = list;
+                        AccountItem.EnsureUniqueProfiles(accounts);
+                        SaveAccounts(); // Migrate legacy plaintext passwords to Windows-protected storage.
                         RefreshGrid();
                         return;
                     }
@@ -1865,6 +2030,7 @@ namespace PhucHsoManager
                 {
                     StopAll();
                 }
+                else SetAllVisible(true); // Do not leave inaccessible hidden games after manager exits.
             }
 
             SaveAccounts();

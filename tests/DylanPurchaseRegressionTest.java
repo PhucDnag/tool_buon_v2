@@ -10,6 +10,11 @@ public final class DylanPurchaseRegressionTest {
     static int checks;
     static void check(boolean ok,String message){ checks++; if(!ok)throw new AssertionError(message); }
     public static void main(String[] args) {
+        String emptyMessage="Ta hết hàng rồi. Một lát nữa hãy quay lại ta sẽ có đủ hàng";
+        check(TradeStock.parse(emptyMessage).empty(),"Screenshot: merchant says all stock is exhausted");
+        check(TradeStock.parse(emptyMessage.replace(' ', '\n')).empty(),"Wrapped screenshot message");
+        check(!TradeStock.parse("Ta chưa hết hàng").empty(),"Do not infer zero stock from negation");
+        check(!TradeStock.parse("Kim cương hết hàng rồi").empty(),"Single gem depletion is not all-stock depletion");
         String message="Ta chỉ còn 23 viên\nsaphia 17 viên ruby 8 viên kim cương 150\nNgọc trai đen mà thôi,\nnhanh tay lên kẻo hết.";
         TradeStock stock=TradeStock.parse(message);
         check(stock.count[0]==8&&stock.count[1]==17&&stock.count[2]==23,"Parse complete Dylan sentence without commas");
@@ -64,6 +69,21 @@ public final class DylanPurchaseRegressionTest {
         live.tick(beast,14000);
         check(live.engine.state==TradeEngine.STOCK,"Reconnect at selected market continues loading existing unknown cargo");
         check(live.view.cargo==-1,"Resumed trip does not invent a cargo quantity");
+        for (int rotate=0;rotate<2;rotate++) {
+            GameScreen.Vecplayers.removeAllElements(); GameScreen.Vecplayers.addElement(dylan);
+            GameCanvas.currentDialog=null;
+            TradeConfig emptyConfig=new TradeConfig(); emptyConfig.market=1; emptyConfig.rotateMarkets=rotate==1;
+            LiveTrade emptyLive=new LiveTrade(emptyConfig,new MapGraph());
+            emptyLive.toggle(1000); emptyLive.tick(null,1000);
+            int queried=net.queryCalls;
+            dylan.strChatPopup=emptyMessage; emptyLive.chat(dylan); emptyLive.tick(null,2000);
+            if (rotate==1) check(emptyLive.engine.market==2 && emptyLive.engine.state==TradeEngine.TO_MARKET,"Screenshot triggers configured market rotation");
+            else {
+                check(emptyLive.engine.market==1 && emptyLive.engine.state==TradeEngine.STOCK,"Screenshot waits at selected market when rotation disabled");
+                emptyLive.tick(null,3000);
+                check(net.queryCalls==queried,"Empty-market wait does not spam NPC");
+            }
+        }
         System.out.println("PASS Dylan identity, stock and existing-animal purchase: "+checks+" assertions");
     }
 }

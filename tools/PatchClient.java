@@ -63,6 +63,20 @@ public final class PatchClient implements Opcodes {
                         super.visitInsn(opcode);
                     }
                     public void visitCode() {
+                        if (owner.equals("Main/GameCanvas") && name.equals("paint") && desc.equals("(LCLib/TemGraphics;)V")) {
+                            call("shouldPaint","()Z");
+                            Label render=new Label(); super.visitJumpInsn(IFNE,render); super.visitInsn(RETURN); super.visitLabel(render);
+                        }
+                        if (owner.equals("GameScreen/LoginScreen") && name.equals("Show") && desc.equals("()V"))
+                            call("prepareManagerLogin","()V");
+                        if (owner.equals("GameScreen/LoginScreen") && (name.equals("setScreen") || name.equals("loadUser_Pass")) && desc.equals("()V")) {
+                            call("applyManagerLogin","()Z");
+                            if (name.equals("loadUser_Pass")) {
+                                Label legacy=new Label(); super.visitJumpInsn(IFEQ,legacy);
+                                super.visitInsn(RETURN); super.visitLabel(legacy);
+                            } else super.visitInsn(POP);
+                            hits.add("managerLogin/"+name);
+                        }
                         super.visitCode();
                         if (owner.equals("CLib/Session_ME") && name.equals("doSendMessage")) {
                             super.visitVarInsn(ALOAD,1);
@@ -152,7 +166,7 @@ public final class PatchClient implements Opcodes {
                 byte[] bytes=read(input.getInputStream(entry));
                 if (name.endsWith(".class")) {
                     String owner=name.substring(0,name.length()-6);
-                    if (owner.equals("CLib/Session_ME") || owner.equals("CLib/Session_ME$MessageCollector") || owner.equals("Main/GameCanvas") || owner.equals("GameScreen/GameScreen") || owner.equals("GameObjects/MainObject")
+                    if (owner.equals("GameScreen/LoginScreen") || owner.equals("CLib/Session_ME") || owner.equals("CLib/Session_ME$MessageCollector") || owner.equals("Main/GameCanvas") || owner.equals("GameScreen/GameScreen") || owner.equals("GameObjects/MainObject")
                             || owner.equals("netcommand/global/GlobalLogicHandler") || owner.equals("netcommand/global/GlobalService")
                             || owner.equals("netcommand/global/ReadMessenge") || owner.equals("Model/Menu2")
                             || owner.equals("InterfaceComponents/MsgDialog") || owner.equals("InterfaceComponents/TabShopNew")
@@ -164,6 +178,8 @@ public final class PatchClient implements Opcodes {
         } finally { out.close(); input.close(); }
         String[] required={"traceSend","traceConnect","traceNetworkError","tick","appendMenu","paint","disconnected","serverMenu","displayName","npcChat","npcChat/chat_npc","npcChat/npcInfo","npcChat/chatPopup","stockRequested","serverDialog","serverDialogOne","serverNamedShop","serverText","pointerClick","keyPress","hideTradeShop","hideTradeMenu"};
         for (String hook:required) if (!hits.contains(hook)) throw new IllegalStateException("Missing hook: "+hook);
+        for (String hook:new String[]{"managerLogin/setScreen","managerLogin/loadUser_Pass","prepareManagerLogin","shouldPaint"})
+            if (!hits.contains(hook)) throw new IllegalStateException("Missing hook: "+hook);
         java.nio.file.Files.move(temporary.toPath(),destination.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         System.out.println("Patched hooks: "+hits);
     }

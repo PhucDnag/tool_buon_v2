@@ -164,8 +164,8 @@ public final class MovementVerificationTest {
         // Target: Cổng Địa Ngục -> direct portal on map!
         GameScreen.player.posTransRoad = null;
         nav.go("Cổng Địa Ngục", -1, null, 10000);
-        assertCondition(nav.status.indexOf("Cổng Địa Ngục") >= 0, "From Đồi Xác Chết to Cổng Địa Ngục, must choose Cổng Địa Ngục portal, got: " + nav.status);
-        assertCondition(GameScreen.player.xStopMove == pCongDiaNguc.x && GameScreen.player.yStopMove == pCongDiaNguc.y, "Must target real coordinates of Cổng Địa Ngục portal");
+        assertCondition(nav.status.indexOf("Cửa Biển") >= 0, "From dead-end hill return via approved Cua Bien route: " + nav.status);
+        assertCondition(GameScreen.player.xStopMove == pCuaBien.x && GameScreen.player.yStopMove == pCuaBien.y, "Ignore unapproved direct shortcut");
 
         // Target: Graham (Thung Lũng Kỳ Bí) -> must return via Cửa Biển
         GameScreen.player.posTransRoad = null;

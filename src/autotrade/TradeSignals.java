@@ -2,6 +2,12 @@ package autotrade;
 
 /** Pure matching rules, shared by live adapter and tests. */
 public final class TradeSignals {
+    public static boolean replaceAnimalConfirmation(String text) {
+        String s=TradeStock.normalize(text).replace('\n',' ').replace('\r',' ').replace('\u00a0',' ');
+        while (s.indexOf("  ")>=0) s=s.replaceAll("  "," ");
+        return s.indexOf("con vat buon")>=0 && s.indexOf("co muon huy")>=0
+                && s.indexOf("thu cu")>=0 && s.indexOf("tao con thu moi")>=0;
+    }
     public static boolean animalUseConfirmation(String text) {
         String s=TradeStock.normalize(text);
         return s.indexOf("co muon su dung")>=0 && s.indexOf("thoi gian")>=0

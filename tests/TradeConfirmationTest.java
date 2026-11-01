@@ -13,6 +13,7 @@ public final class TradeConfirmationTest {
     static mVector options(String caption) { mVector list=new mVector(); list.addElement(new iCommand(caption)); return list; }
     static LiveTrade start() { return start(new TradeConfig()); }
     static LiveTrade start(TradeConfig config) {
+        GameCanvas.menu2.isShowMenu=false;
         GameCanvas.loadmap.idMap=19; GameCanvas.loadmap.nameMap="Cửa Biển";
         GameCanvas.currentDialog=null; GameScreen.player=new Player(); GameScreen.player.x=200; GameScreen.player.y=200;
         GameScreen.Vecplayers.removeAllElements(); Item.VecInvetoryPlayer.removeAllElements();
@@ -32,6 +33,20 @@ public final class TradeConfirmationTest {
         mVector items=new mVector(); Item gem=new Item(); gem.Id=81; gem.ItemCatagory=4; gem.itemName="Kim Cương"; items.addElement(gem); return items;
     }
     public static void main(String[] args) {
+        String replacementPrompt="Con vật buôn của bạn đang ở map Hố Tử Thần vị trí 10 , 37. Bạn có muốn hủy con thú cũ để tạo con thú mới không ?";
+        check(TradeSignals.replaceAnimalConfirmation(replacementPrompt),"Recognize remote old-animal replacement screenshot");
+        check(TradeSignals.replaceAnimalConfirmation(replacementPrompt.replace(' ', '\n')),"Wrapped replacement prompt");
+        check(!TradeSignals.replaceAnimalConfirmation("Bạn có muốn hủy con thú cũ không ?"),"Do not accept unrelated cancellation as replacement");
+        LiveTrade replacementLive=start();
+        Object replacementDialog=new Object(); GameCanvas.currentDialog=replacementDialog;
+        mVector replacementButtons=options("Ok"); replacementButtons.addElement(new iCommand("Hủy"));
+        iCommand replacementOk=(iCommand)replacementButtons.elementAt(0);
+        int replacementUses=GlobalService.gI().potionCalls;
+        replacementLive.dialog(replacementDialog,replacementPrompt,replacementButtons); replacementLive.tick(null,2500);
+        check(replacementOk.calls==1 && ((iCommand)replacementButtons.elementAt(1)).calls==0,"Confirm creating replacement for off-map animal after summon");
+        replacementLive.dialog(replacementDialog,replacementPrompt,replacementButtons); replacementLive.tick(null,2600);
+        check(replacementOk.calls==1 && GlobalService.gI().potionCalls==replacementUses,"Do not duplicate confirmation or item use");
+        check(replacementLive.engine.state==TradeEngine.SUMMON,"Wait for server animal instead of assuming success");
         check(TradeSignals.startTradeConfirmation(PROMPT),"Match exact supplied screenshot");
         check(TradeSignals.startTradeConfirmation(PROMPT.replace(' ', '\n')),"Line-wrapped prompt also matches");
         check(TradeSignals.startTradeConfirmation(PROMPT.replace('1', '9')),"Duration is not hardcoded");
@@ -164,6 +179,7 @@ public final class TradeConfirmationTest {
         live.serverText("Mua thành công"); live.tick(beast,5100); live.tick(beast,5200);
         live.serverText("Kim Cương: 0, Rubi: 0, Saphia: 0; Ngọc trai đen: 999"); live.tick(beast,5300);
         check(live.engine.state==TradeEngine.TO_SELL && live.view.cargo==1,"All gems exhausted during buying escorts partial load, ignoring pearls");
+        check(live.intent==0,"Depleted partial load clears pending purchase actions before escort");
 
         live=start(); live.tick(beast,3000); live.tick(beast,4000);
         live.shop(goods(),13,11); live.tick(beast,5000);
@@ -318,6 +334,10 @@ public final class TradeConfirmationTest {
         check(ok.calls==1 && live.engine.state==TradeEngine.WAIT_REPLACE,"Auto OK screenshot prompt after replacement item use");
         live.dialog(dialog,usePrompt,buttons); live.tick(beast,3300);
         check(ok.calls==1,"Duplicate confirmation is not performed twice");
+        Object replaceStep=new Object(); GameCanvas.currentDialog=replaceStep;
+        mVector replaceStepButtons=options("OK");
+        live.dialog(replaceStep,replacementPrompt.replace(' ', '\n'),replaceStepButtons); live.tick(beast,3400);
+        check(((iCommand)replaceStepButtons.elementAt(0)).calls==1,"Confirm second replacement step after first item-use dialog");
         live.tick(null,3500); beast.ID=71; beast.hp=100; live.tick(beast,4000);
         live.toggle(4100); live.toggle(4200);
         // A server cargo report explicitly confirms the empty animal outside market.
@@ -358,6 +378,78 @@ public final class TradeConfirmationTest {
         check(live.cargoShop(sixCargo(),13,11,"Lừa vàng"),"Receive nonempty animal inventory");
         live.tick(beast,4800);
         check(live.view.cargo==6 && live.engine.state==TradeEngine.TO_SELL,"Nonempty inventory permits escort without cancelling animal");
+        live=start();
+        beast=new MainObject(); beast.ID=950; beast.name="Lừa vàng"; beast.x=200; beast.y=200;
+        live.tick(beast,3000);
+        GameScreen.ObjFocus=beast;
+        GameCanvas.menu2.isShowMenu=true;
+        live.menu(options("Hành trang thú"),0,-56,"");
+        live.tick(beast,3200);
+        check(GameCanvas.menu2.isShowMenu,"Auto does not close manually opened animal menu");
+        live.engine.state=TradeEngine.STOCK;
+        check(live.cargoShop(sixCargo(),13,11,"Lừa vàng"),"Manual owned-animal inventory feeds authoritative cargo");
+        check(!live.hasHiddenShop(),"Manual animal inventory remains visible during auto");
+        live.tick(beast,3400);
+        check(live.view.cargo==6 && live.view.full && live.engine.state==TradeEngine.TO_SELL,
+            "Full server inventory leaves stock-check state and starts escort");
+        check(live.intent==0,"Full inventory clears outstanding merchant actions");
+        int fullBuys=net.buyCalls;
+        live.tick(beast,3600);
+        check(net.buyCalls==fullBuys,"No extra purchase after inventory confirms full");
+        GameScreen.ObjFocus=null;
+        // Exact screenshot menu: focus is on the cow, header text may be null.
+        live=start(); live.toggle(2200);
+        GameCanvas.loadmap.idMap=37; GameCanvas.loadmap.nameMap="Rừng Cao Nguyên";
+        beast=new MainObject(); beast.ID=980; beast.name="Lừa vàng"; beast.x=200; beast.y=200;
+        GameScreen.ObjFocus=beast;
+        Thread_More.LoadMap.vecPointChange.removeAllElements();
+        Model.Point exit=new Model.Point(); exit.name="Đồi Cát"; exit.x=48; exit.y=48;
+        Thread_More.LoadMap.vecPointChange.addElement(exit);
+        live.toggle(3000); live.tick(beast,3000);
+        int autoMenus=net.menuCalls;
+        mVector animalMenu=options("Hành trang");
+        animalMenu.addElement(new iCommand("Tăng tốc")); animalMenu.addElement(new iCommand("Bảo hộ"));
+        animalMenu.addElement(new iCommand("Hồi máu"));
+        GameCanvas.menu2.isShowMenu=true;
+        live.menu(animalMenu,0,-56,null); live.tick(beast,3200);
+        check(net.menuCalls==autoMenus+1 && net.lastIndex==0 && !GameCanvas.menu2.isShowMenu,
+            "Automatic cargo request selects Hanh trang despite animal focus and null header");
+        check(live.cargoShop(sixCargo(),13,11,"Lừa vàng") && live.hasHiddenShop(),
+            "Automatically requested inventory remains in background even with animal focus");
+        live.takeHiddenShop(); live.tick(beast,3400); live.tick(beast,5000);
+        check(live.view.cargo==6 && live.engine.state==TradeEngine.TO_SELL && GameScreen.player.posTransRoad!=null,
+            "Inventory response leads animal toward Doi Cat instead of reopening animal menu");
+        live.tick(beast,10000);
+        check(net.menuCalls==autoMenus+1,"Known cargo does not repeat inventory menu checks");
+        live=start(); live.toggle(2200);
+        GameCanvas.loadmap.idMap=37; GameCanvas.loadmap.nameMap="Rừng Cao Nguyên";
+        live.toggle(3000); live.tick(beast,3000);
+        live.manualInput(); autoMenus=net.menuCalls;
+        GameCanvas.menu2.isShowMenu=true;
+        live.menu(animalMenu,0,-56,null); live.tick(beast,3200); live.tick(beast,9000);
+        check(GameCanvas.menu2.isShowMenu && net.menuCalls==autoMenus,
+            "Actual user input takes ownership and menu is not clicked or reopened by auto");
+        GameScreen.ObjFocus=null;
+        live=start(); live.toggle(2200);
+        GameCanvas.loadmap.idMap=8; GameCanvas.loadmap.nameMap=TradeConfig.SELLER_MAP;
+        GameCanvas.loadmap.mapW=20; GameCanvas.loadmap.mapH=20; GameCanvas.loadmap.mapType=new int[400];
+        graham=new MainObject(); graham.ID=77; graham.typeObject=2; graham.name="Graham";
+        graham.x=200; graham.y=200; GameScreen.Vecplayers.addElement(graham);
+        beast=new MainObject(); beast.ID=990; beast.name="Lừa vàng"; beast.x=200; beast.y=200;
+        live.toggle(3000); live.tick(beast,3000);
+        live.view.cargo=3; live.engine.state=TradeEngine.TO_SELL;
+        // Secure the leash on approach, then leave the cow just outside sale range.
+        GameScreen.player.x=120; graham.x=200; beast.x=120;
+        live.tick(beast,5000);
+        GameScreen.player.x=200; beast.x=145;
+        live.tick(beast,5200);
+        check(!live.view.atSeller && GameScreen.player.posTransRoad!=null && GameScreen.player.xStopMove==145,
+            "At Graham with cow 55px away, walk back to cow instead of stopping at NPC forever");
+        beast.x=200; live.tick(beast,5400); live.tick(beast,5600);
+        check(live.engine.state==TradeEngine.WAIT_SALE && live.intent==LiveTrade.SELL,
+            "Once cow is close, automatically request selling menu");
+        live.menu(options("Bán hàng"),2,77,""); live.tick(beast,5800);
+        check(net.lastNpc==77 && net.lastIndex==0,"Automatically select Graham sale option after reunion");
         System.out.println("PASS trade confirmation and purchasing: "+checks+" assertions");
     }
 }

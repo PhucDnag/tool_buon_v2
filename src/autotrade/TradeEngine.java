@@ -153,10 +153,14 @@ public final class TradeEngine {
         // Replace low-HP animals using their item, then wait for gem pickup.
         // Timer-only trip responses do not provide a cargo count.
         if (view.animal && view.maxHp>0 && (long)view.hp*100 < (long)view.maxHp*TradeConfig.HP[config.hpIndex]
-                && (state==BUY || state==TO_SELL)) {
-            previousCargo=view.cargo; replaceState=state; state=REPLACE; due=now; port.stopMovement();
+                && (state==BUY || state==WAIT_BUY || state==STOCK || state==TO_SELL)) {
+            previousCargo=view.cargo; replaceState=state==TO_SELL ? TO_SELL : TO_MARKET;
+            awaitingStock=false; stock=null; state=REPLACE; due=now; port.stopMovement();
         }
         if (now<due) return;
+        if (view.animal && view.full && (state==STOCK || state==BUY || state==WAIT_BUY || state==SUMMON)) {
+            state=TO_SELL; stock=null; awaitingStock=false; buyAttempts=0;
+        }
         due=now+((state==BUY || state==WAIT_BUY)?100:150);
         switch (state) {
             case TO_MARKET:

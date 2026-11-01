@@ -180,108 +180,36 @@ public final class Navigator {
             routeGoal = goal;
         }
 
-        // The selling journey must use the confirmed desert corridor. Do not let
-        // seeded shortcuts or a route cache send the animal through another exit.
-        String sellerExit = null;
-        String[] requiredRoute = same(target, TradeConfig.MARKETS[0]) ? TradeConfig.HELL_ROUTE
-                : same(target, TradeConfig.SELLER_MAP) ? TradeConfig.SELLER_ROUTE : null;
-        if (requiredRoute != null) {
-            for (int i=0; i<requiredRoute.length-1; i++) {
-                if (same(current, requiredRoute[i])) {
-                    sellerExit=requiredRoute[i+1];
-                    break;
-                }
+        // Choose the entire route from approved topology before moving. Live
+        // portals supply coordinates only; cached shortcuts cannot select a map.
+        String nextMap=KnownRoutes.next(current,target);
+        Point portal=nextMap==null ? null : findPortal(nextMap);
+        // A live exit can connect an unmapped origin to the world graph, but
+        // only if the entire remaining route is already computable. Never
+        // choose a frontier merely to discover what lies beyond it.
+        if (portal==null || !graph.canUse(current,nextMap)) {
+            int best=Integer.MAX_VALUE;
+            Point alternative=null;
+            if (LoadMap.vecPointChange!=null) for(int i=0;i<LoadMap.vecPointChange.size();i++) {
+                Point p=(Point)LoadMap.vecPointChange.elementAt(i);
+                if(p==null || p.name==null || !graph.canUse(current,p.name)) continue;
+                int distance=KnownRoutes.remaining(p.name,target,current);
+                if(distance<best) { best=distance; alternative=p; }
             }
+            if(alternative!=null) { portal=alternative; nextMap=alternative.name; }
         }
-        if (sellerExit != null) {
-            Point portal = findPortal(sellerExit);
-            if (portal != null && graph.canUse(current, portal.name)) {
-                status = "Đi tới " + portal.name;
-                walkPortal(portal.x, portal.y, beast, now);
-            } else {
-                status = "Chưa có cổng tới " + sellerExit + "; dừng để tránh đi sai tuyến";
-                stop();
-            }
+        if (nextMap==null) {
+            status="Chưa có tuyến chuẩn từ "+current+" đến "+target+"; dừng, không dò đường";
+            stop();
             return false;
         }
-
-        // 1. Direct portal check: Does current map have a portal directly to target?
-        Point directPortal = findPortal(target);
-        if (directPortal != null && graph.canUse(current, directPortal.name)) {
-            status = "Đi tới " + directPortal.name;
-            walkPortal(directPortal.x, directPortal.y, beast, now);
+        if (portal==null || !graph.canUse(current,nextMap)) {
+            status="Thiếu hoặc bị chặn cổng tuyến chuẩn tới "+nextMap+"; dừng, không dò đường";
+            stop();
             return false;
         }
-
-        // 2. Among physical portals on this map, find the one with shortest route to
-        // target
-        Point chosenPortal = null;
-        int bestDistance = Integer.MAX_VALUE;
-
-        if (LoadMap.vecPointChange != null && LoadMap.vecPointChange.size() > 0) {
-            for (int i = 0; i < LoadMap.vecPointChange.size(); i++) {
-                Point p = (Point) LoadMap.vecPointChange.elementAt(i);
-                if (p == null || p.name == null || !graph.canUse(current, p.name))
-                    continue;
-                if (same(p.name, target)) {
-                    chosenPortal = p;
-                    bestDistance = 0;
-                    break;
-                }
-                int d = graph.distance(p.name, target, current);
-                if (d < bestDistance) {
-                    bestDistance = d;
-                    chosenPortal = p;
-                }
-            }
-        }
-
-        if (chosenPortal != null && bestDistance < Integer.MAX_VALUE) {
-            status = "Đi tới " + chosenPortal.name;
-            walkPortal(chosenPortal.x, chosenPortal.y, beast, now);
-            return false;
-        }
-
-        // 3. Fallback to graph.next(current, target)
-        MapGraph.Exit exit = graph.next(current, target);
-        if (exit != null) {
-            Point realExit = findPortal(exit.to);
-            if (realExit != null && graph.canUse(current, realExit.name)) {
-                status = "Đi tới " + realExit.name;
-                walkPortal(realExit.x, realExit.y, beast, now);
-                return false;
-            }
-        }
-
-        // 4. If no known route to target, but beast == null, explore forward (never
-        // backtrack to previousMap)
-        if (beast == null && LoadMap.vecPointChange != null && LoadMap.vecPointChange.size() > 0) {
-            Point forwardPortal = null;
-            for (int i = 0; i < LoadMap.vecPointChange.size(); i++) {
-                Point p = (Point) LoadMap.vecPointChange.elementAt(i);
-                if (p != null && p.name != null && graph.canUse(current, p.name) && !same(p.name, previousMap)) {
-                    forwardPortal = p;
-                    break;
-                }
-            }
-            if (forwardPortal == null) {
-                for (int i = 0; i < LoadMap.vecPointChange.size(); i++) {
-                    Point p = (Point) LoadMap.vecPointChange.elementAt(i);
-                    if (p != null && p.name != null && graph.canUse(current, p.name)) {
-                        forwardPortal = p;
-                        break;
-                    }
-                }
-            }
-            if (forwardPortal != null) {
-                status = "Khảo sát đường: " + forwardPortal.name;
-                walkPortal(forwardPortal.x, forwardPortal.y, beast, now);
-                return false;
-            }
-        }
-
-        status = "Chưa có tuyến đến " + target + "; dừng để tránh lặp map";
-        stop();
+        status="Đi tới "+portal.name;
+        walkPortal(portal.x,portal.y,beast,now);
         return false;
     }
 
@@ -358,9 +286,6 @@ public final class Navigator {
     public boolean walk(int x, int y, int radius, MainObject beast, long now) {
         Player p=GameScreen.player;
         if (p==null || p.hp<=0 || now<transitionUntil) return false;
-        // Selecting the owned animal is not required to lead it. Keep its
-        // interaction target from competing with an active escort movement.
-        if (beast!=null && GameScreen.ObjFocus==beast) GameScreen.ObjFocus=null;
         if (MainObject.getDistance(p.x,p.y,x,y)<=Math.max(16,radius*LoadMap.wTile)) {
             resetStallWatch();
             return walkInternal(x,y,radius,beast,now);

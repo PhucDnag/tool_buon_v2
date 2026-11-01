@@ -71,7 +71,8 @@ public final class TradeStock {
         int pearlIndex = wordIndex(s, "ngoc trai");
         boolean onlyCountedPearls = s.indexOf("ta chi con") >= 0 && pearlIndex >= 0 && quantityBefore(s, pearlIndex, false) >= 0;
         if (stock.choose(0) < 0 && !mentionsGem && (s.indexOf("het sach da quy") >= 0 || s.indexOf("chi con ngoc trai") >= 0 || onlyCountedPearls
-                || s.indexOf("ta da het hang")>=0 || s.indexOf("ta khong con hang")>=0 || s.indexOf("ta khong con da quy")>=0)) {
+                || s.indexOf("ta da het hang")>=0 || s.indexOf("ta het hang roi")>=0
+                || s.indexOf("ta khong con hang")>=0 || s.indexOf("ta khong con da quy")>=0)) {
             for (int i = 0; i < 3; i++) stock.count[i] = 0;
         }
         return stock;

@@ -39,6 +39,8 @@ public final class ClientMod {
     private static boolean reconnecting, selectionSent;
     private static boolean resumePending;
     private static final ManagerControl managerControl=new ManagerControl();
+    private static final RuntimeMaintenance maintenance=new RuntimeMaintenance();
+    public static boolean shouldPaint() { return maintenance.paint(System.currentTimeMillis()); }
     private static void pollManager(long now) {
         int command=managerControl.poll(System.getProperty("phuc.control"),now);
         if (command<0) return;
@@ -62,52 +64,33 @@ public final class ClientMod {
     private static long selectCharScreenEnteredTime;
     private static MainObject animal;
     private static String log="";
+    private static final StartupLogin startupLogin=new StartupLogin();
+
+    public static void prepareManagerLogin() {
+        // Native auto-login requires old RMS and can run before server selection.
+        if (System.getProperty("phuc.user")!=null) LoginScreen.isAutoLogin=false;
+    }
+
+    public static boolean applyManagerLogin() {
+        String user=System.getProperty("phuc.user");
+        String pass=System.getProperty("phuc.pass");
+        if (user==null || user.length()==0 || pass==null
+                || LoginScreen.tfusername==null || LoginScreen.tfpassword==null) return false;
+        LoginScreen.tfusername.setText(user);
+        LoginScreen.tfpassword.setText(pass);
+        // The original client prefers its cached guest account on reconnect.
+        LoginScreen.username="";
+        LoginScreen.password="";
+        return true;
+    }
 
     private static synchronized void init() {
         if (loaded) return;
         loaded=true;
         live=new LiveTrade(config,graph);
         loadSavedConfig();
-        try {
-            String pSlot=System.getProperty("phuc.slot");
-            if (pSlot!=null && pSlot.length()>0) config.charSlot=Integer.parseInt(pSlot.trim());
-            String pMarket=System.getProperty("phuc.market");
-            if (pMarket!=null && pMarket.length()>0) config.market=Math.max(0,Math.min(2,Integer.parseInt(pMarket.trim())));
-            String pGem=System.getProperty("phuc.gem");
-            if (pGem!=null && pGem.length()>0) config.gem=Math.max(0,Math.min(2,Integer.parseInt(pGem.trim())));
-            String pAnimal=System.getProperty("phuc.animal");
-            if (pAnimal!=null && pAnimal.length()>0) config.animal=Math.max(0,Math.min(2,Integer.parseInt(pAnimal.trim())));
-            String pHp=System.getProperty("phuc.hp");
-            if (pHp!=null && pHp.length()>0) config.hpIndex=Math.max(0,Math.min(3,Integer.parseInt(pHp.trim())));
-            String pAutoOn=System.getProperty("phuc.autoon");
-            if (pAutoOn!=null && pAutoOn.length()>0) {
-                boolean on="1".equals(pAutoOn.trim()) || "true".equalsIgnoreCase(pAutoOn.trim());
-                config.resumeTrade=on;
-                resumePending=on;
-            }
-            String pReconnect=System.getProperty("phuc.reconnect");
-            if (pReconnect!=null && pReconnect.length()>0) config.reconnect="1".equals(pReconnect.trim()) || "true".equalsIgnoreCase(pReconnect.trim());
-            String pMount=System.getProperty("phuc.automount");
-            if (pMount!=null && pMount.length()>0) config.autoMount="1".equals(pMount.trim()) || "true".equalsIgnoreCase(pMount.trim());
-            config.rotateMarkets=launchBool("phuc.rotate",config.rotateMarkets);
-            config.teleport=launchBool("phuc.teleport",config.teleport);
-            config.hud=launchBool("phuc.hud",config.hud);
-            config.visual=launchBool("phuc.visual",config.visual);
-            config.fakeName=launchBool("phuc.fakename",config.fakeName);
-            config.silentBuy=launchBool("phuc.silentbuy",config.silentBuy);
-            String mount=System.getProperty("phuc.mountname");
-            if (mount!=null) { config.mountName=mount.trim(); config.mountItem=-1; }
-            String pServer=System.getProperty("phuc.server");
-            if (pServer!=null && pServer.length()>0) {
-                pServer=pServer.trim();
-                for (int i=0;i<CLib.mSystem.listServer.length;i++) {
-                    if (pServer.equalsIgnoreCase(CLib.mSystem.listServer[i][0])) {
-                        GameCanvas.IndexServer=(byte)i;
-                        break;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
+        LaunchConfig.apply(config);
+        resumePending=config.resumeTrade;
     }
     private static boolean launchBool(String key,boolean fallback) {
         String value=System.getProperty(key);
@@ -329,58 +312,38 @@ public final class ClientMod {
         init(); return config.fakeName && object==GameScreen.player ? "PhucHso" : object.name;
     }
     private static boolean openMenuPending;
+    private static boolean toolInputAvailable() {
+        return GameScreen.player!=null && GameCanvas.menu2!=null
+                && ToolInput.available(GameCanvas.currentScreen==GameCanvas.game,
+                    GameCanvas.menu2.isShowMenu,GameCanvas.currentDialog!=null,ChatTextField.isShow);
+    }
     public static void pointerClick(int x, int y) {
         init();
-        if (GameScreen.player==null || GameCanvas.currentScreen!=GameCanvas.game || GameCanvas.menu2==null) return;
-        if (GameCanvas.currentDialog!=null || ChatTextField.isShow) return;
-        int px=x/mGraphics.zoomLevel, py=y/mGraphics.zoomLevel;
-        if (px>=94 && px<=190 && py>=0 && py<=28) {
-            GameCanvas.isPointerMove=true; GameCanvas.isPointerSelect=false;
-            GameCanvas.isPointerDown=false; GameCanvas.isPointerRelease=false;
-            openMenuPending=true; return;
-        }
-        if (config.hud && px>=0 && px<=180 && py>=32 && py<=130) {
-            GameCanvas.isPointerMove=true; GameCanvas.isPointerSelect=false;
-            GameCanvas.isPointerDown=false; GameCanvas.isPointerRelease=false;
-            openMenuPending=true; return;
-        }
+        live.manualInput();
+        if (!toolInputAvailable() || !ToolInput.button(x,y,mGraphics.zoomLevel)) return;
+        GameCanvas.isPointerMove=true; GameCanvas.isPointerSelect=false;
+        GameCanvas.isPointerDown=false; GameCanvas.isPointerRelease=false;
+        openMenuPending=true;
     }
     public static void keyPress(int keyCode) {
         init();
-        if (GameScreen.player==null || GameCanvas.currentScreen!=GameCanvas.game || GameCanvas.menu2==null) return;
-        if (GameCanvas.currentDialog!=null || ChatTextField.isShow) return;
-        if (keyCode==109 || keyCode==77 || keyCode==116 || keyCode==84 || keyCode==48 || keyCode==-6) {
-            GameCanvas.clearKeyPressed(); GameCanvas.clearKeyHold();
-            openMenuPending=true;
-        }
+        live.manualInput();
+        if (!toolInputAvailable() || !ToolInput.shortcut(keyCode)) return;
+        openMenuPending=true;
     }
     private static void checkInput() {
-        if (GameCanvas.currentScreen!=GameCanvas.game || GameCanvas.menu2==null || GameCanvas.menu2.isShowMenu
-                || GameCanvas.currentDialog!=null || ChatTextField.isShow) return;
-        boolean trigger=false;
-        if (GameCanvas.isPointSelect(96,2,88,24) || GameCanvas.isPointSelect(0,38,140,80)) {
-            GameCanvas.isPointerSelect=false;
-            trigger=true;
-        }
-        if (GameCanvas.keyMyHold[12] || GameCanvas.keyMyPressed[12]) {
-            GameCanvas.clearKeyHold(12);
-            GameCanvas.clearKeyPressed(12);
-            trigger=true;
-        }
-        if (GameCanvas.keyAsciiPress==109 || GameCanvas.keyAsciiPress==77
-                || GameCanvas.keyAsciiPress==116 || GameCanvas.keyAsciiPress==84
-                || GameCanvas.keyAsciiPress==48 || GameCanvas.keyMyPressed[20] || GameCanvas.keyMyHold[20]) {
+        if (!toolInputAvailable()) return;
+        if (ToolInput.shortcut(GameCanvas.keyAsciiPress)) {
             GameCanvas.keyAsciiPress=0;
-            GameCanvas.clearKeyPressed(20);
-            GameCanvas.clearKeyHold(20);
-            trigger=true;
+            menu();
         }
-        if (trigger) menu();
     }
     public static void tick() {
         init();
         if (openMenuPending) {
             openMenuPending=false;
+            if (!toolInputAvailable()) return;
+            GameCanvas.keyAsciiPress=0;
             GameCanvas.isPointerSelect=false;
             GameCanvas.isPointerClick=false;
             GameCanvas.clearKeyPressed();
@@ -390,6 +353,9 @@ public final class ClientMod {
         }
         checkInput();
         long now=System.currentTimeMillis(); if (now<nextTick) return; nextTick=now+50;
+        maintenance.update(now,System.getProperty("phuc.control"),live.earnings,
+                !Session_ME.gI().connecting && GameCanvas.currentDialog==null && !reconnecting
+                && (!live.active() || live.engine.state==TradeEngine.PAUSED || live.engine.state==TradeEngine.STOCK));
         try {
             pollManager(now);
             if (GameCanvas.currentScreen==GameCanvas.selectChar) {
@@ -412,21 +378,28 @@ public final class ClientMod {
             }
             if (GameCanvas.currentScreen==GameCanvas.login) {
                 try {
-                    String pUser=System.getProperty("phuc.user");
-                    String pPass=System.getProperty("phuc.pass");
-                    if (pUser!=null && pUser.length()>0 && LoginScreen.tfusername!=null) {
-                        if (LoginScreen.tfusername.getText().length()==0) {
-                            LoginScreen.tfusername.setText(pUser.trim());
+                    String server=System.getProperty("phuc.server");
+                    if (!Session_ME.gI().isConnected() && server!=null && CLib.mSystem.listServer!=null) {
+                        int index=LaunchConfig.serverIndex(server,CLib.mSystem.listServer);
+                        if (index>=0 && GameCanvas.IndexServer!=(byte)index) {
+                            GameCanvas.IndexServer=(byte)index;
+                            LoginScreen.saveIndexServer();
                         }
                     }
-                    if (pPass!=null && pPass.length()>0 && LoginScreen.tfpassword!=null) {
-                        if (LoginScreen.tfpassword.getText().length()==0) {
-                            LoginScreen.tfpassword.setText(pPass);
-                        }
+                    String user=System.getProperty("phuc.user"), pass=System.getProperty("phuc.pass");
+                    int requested=LaunchConfig.serverIndex(server,CLib.mSystem.listServer);
+                    boolean ready=user!=null && user.length()>0 && pass!=null && pass.length()>0
+                            && requested>=0 && GameCanvas.IndexServer==(byte)requested
+                            && GameCanvas.login.section==0 && GameCanvas.currentDialog==null
+                            && !GameCanvas.menu2.isShowMenu && LoginScreen.tfusername!=null && LoginScreen.tfpassword!=null;
+                    if (startupLogin.claim(ready,Session_ME.gI().isConnected(),Session_ME.gI().connecting)) {
+                        applyManagerLogin();
+                        status="Đang đăng nhập tài khoản từ quản lí";
+                        GameCanvas.login.commandTab(0,0);
                     }
                 } catch (Throwable ignored) {}
             }
-            if (resumePending && config.reconnect && charId>=0 && GameCanvas.currentScreen==GameCanvas.login && !reconnecting) {
+            if (System.getProperty("phuc.user")==null && resumePending && config.reconnect && charId>=0 && GameCanvas.currentScreen==GameCanvas.login && !reconnecting) {
                 reconnecting=true; selectionSent=false; reconnectAt=now+1000;
             }
             reconnect(now);
@@ -434,18 +407,14 @@ public final class ClientMod {
                     && !reconnecting && GameCanvas.currentScreen==GameCanvas.game && SelectCharScreen.isSelectOk;
             if (inGame && !entryObserved) ConnectionTrace.event("ENTER_GAME map="+GameCanvas.loadmap.idMap);
             entryObserved=inGame;
-            if (!entryGate.ready(inGame,now)) return;
+            if (!entryGate.ready(inGame,now)) { animal=null; return; }
             if (!supportApplied) {
                 applySupportSettings(); supportApplied=true;
             }
             Player p=GameScreen.player; if (!reconnecting) {
                 charId=p.ID; if (config.savedCharacter!=charId) { config.savedCharacter=charId; save(); }
             }
-            animal=null;
-            for (int i=0;i<GameScreen.Vecplayers.size();i++) {
-                MainObject o=(MainObject)GameScreen.Vecplayers.elementAt(i);
-                if (o!=null && !o.isRemove && o.isMonstervantieu() && p.name.equals(o.getnameOwner())) { animal=o; break; }
-            }
+            animal=OwnedAnimal.find(p,GameScreen.Vecplayers);
             live.navigation.observe(now);
             if (resumePending && GameCanvas.currentScreen==GameCanvas.game) { resumePending=false; if (!live.active()) live.toggle(now); }
             boolean wasActive=live.active();
@@ -613,13 +582,15 @@ public final class ClientMod {
         int tx=g.getTranslateX(), ty=g.getTranslateY();
         g.translate(-tx,-ty);
         try {
-            if (config.visual && animal!=null && MainScreen.cameraMain!=null) {
+            MainObject visibleAnimal=Session_ME.gI().isConnected() && !reconnecting
+                    ? OwnedAnimal.find(GameScreen.player,GameScreen.Vecplayers) : null;
+            if (config.visual && visibleAnimal!=null && MainScreen.cameraMain!=null) {
                 int cx=MainScreen.cameraMain.xCam,cy=MainScreen.cameraMain.yCam;
-                g.setColor(0xffff00); g.drawLine(GameScreen.player.x-cx,GameScreen.player.y-cy,animal.x-cx,animal.y-cy,false);
-                g.setColor(0xff9900); g.drawArc(animal.x-cx-10,animal.y-cy-10,20,20,0,360,false);
+                g.setColor(0xffff00); g.drawLine(GameScreen.player.x-cx,GameScreen.player.y-cy,visibleAnimal.x-cx,visibleAnimal.y-cy,false);
+                g.setColor(0xff9900); g.drawArc(visibleAnimal.x-cx-10,visibleAnimal.y-cy-10,20,20,0,360,false);
             }
             if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu || GameCanvas.currentDialog!=null) return;
-            int bx=98, by=4, bw=84, bh=20;
+            int bx=ToolInput.X, by=ToolInput.Y, bw=ToolInput.WIDTH, bh=ToolInput.HEIGHT;
             g.setColor(0x181818); g.fillRect(bx,by,bw,bh,false);
             g.setColor(0xff9900); g.drawRect(bx,by,bw,bh,false);
             g.setColor(0x444444); g.drawRect(bx+1,by+1,bw-2,bh-2,false);

@@ -10,6 +10,7 @@ public final class ManagerControl {
         if (path==null || now<nextPoll) return -1;
         nextPoll=now+250;
         try {
+            if (!new File(path).isFile()) return -1;
             BufferedReader reader=new BufferedReader(new FileReader(path));
             String line;
             try { line=reader.readLine(); } finally { reader.close(); }

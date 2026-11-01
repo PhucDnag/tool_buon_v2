@@ -18,6 +18,8 @@ public final class LiveTrade implements TradeEngine.Port {
     public final TradeEngine engine;
     public final Navigator navigation;
     public final TradeEngine.View view=new TradeEngine.View();
+    public final TradeEarnings earnings=new TradeEarnings();
+    private long saleAmount=-1;
     private final TradeConfig config;
     private final Vector events=new Vector();
     private MainObject beast,buyer,seller;
@@ -46,6 +48,8 @@ public final class LiveTrade implements TradeEngine.Port {
     private int infoAttempts;
     private int cargoRequestAnimal=-1, cargoRequestMap=-1;
     private long cargoRequestAt;
+    /** A real user input takes ownership of an outstanding animal dialog. */
+    public void manualInput() { cargoRequestAnimal=-1; }
     private boolean stoppedBuying, resumeBuying, stoppedEscorting, resumeEscorting;
     private long resumeEscortUntil;
     private int stoppedGem=-1, stoppedAnimal=-1, stoppedMap=-1, stoppedMarket=-1, stoppedCargo=-1;
@@ -105,15 +109,19 @@ public final class LiveTrade implements TradeEngine.Port {
         boolean arrived=navigation.go(target,targetMap,beast,now); detail=navigation.status; return arrived;
     }
     public synchronized boolean animalCargo(String name,int count) {
-        if (!active() || beast==null || beast.ID!=cargoRequestAnimal || GameCanvas.loadmap.idMap!=cargoRequestMap
+        if (!active() || beast==null
                 || !TradeStock.normalize(name).equals(TradeStock.normalize(beast.name)) || count<0) return false;
-        Event e=new Event(); e.type=6; e.id=beast.ID; e.menu=count; e.map=cargoRequestMap; enqueue(e);
+        if (beast!=GameScreen.ObjFocus && (beast.ID!=cargoRequestAnimal || GameCanvas.loadmap.idMap!=cargoRequestMap)) return false;
+        Event e=new Event(); e.type=6; e.id=beast.ID; e.menu=count; e.map=GameCanvas.loadmap.idMap; enqueue(e);
         return true;
     }
     public void goSeller() {
         if (beast==null) { Navigator.stop(); detail="Chờ thú đi buôn xuất hiện để dắt tiếp"; return; }
         if (view.cargo<0 && !view.full) {
             Navigator.stop(); detail="Kiểm tra túi hàng trên thú trước khi dắt về bán";
+            if (cargoRequestAnimal<0 && GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu) {
+                detail="Chờ bạn đóng menu để tiếp tục kiểm tra hàng"; return;
+            }
             if (cargoRequestAnimal!=beast.ID || cargoRequestMap!=GameCanvas.loadmap.idMap || lastNow-cargoRequestAt>=5000) {
                 cargoRequestAnimal=beast.ID; cargoRequestMap=GameCanvas.loadmap.idMap; cargoRequestAt=lastNow;
                 info(lastNow);
@@ -133,7 +141,17 @@ public final class LiveTrade implements TradeEngine.Port {
         }
         if (navigation.go(TradeConfig.SELLER_MAP,-1,beast,lastNow)) {
             seller=findNamed("graham");
-            if (seller!=null) navigation.walk(seller.x,seller.y,2,beast,lastNow);
+            if (seller!=null) {
+                // Reaching Graham with the player alone is not enough. walk()
+                // returns immediately at its destination, before leash checks.
+                if (distance(seller)<=64 && distance(beast)>40) {
+                    navigation.approachAnimal(beast,lastNow);
+                    detail="Đến Graham; quay lại đón thú để bán hàng";
+                } else {
+                    navigation.walk(seller.x,seller.y,2,beast,lastNow);
+                    detail=navigation.status;
+                }
+            }
             else detail="Chờ NPC Graham xuất hiện";
         } else detail=navigation.status;
     }
@@ -159,8 +177,9 @@ public final class LiveTrade implements TradeEngine.Port {
             shop=cachedShop; shopId=cachedShopId;
         }
     }
-    public void sell() { begin(SELL,0); saleSent=false; saleAcknowledged=false; }
+    public void sell() { begin(SELL,0); saleSent=false; saleAcknowledged=false; saleAmount=-1; }
     public void recall() {
+        purchaseSent=false; itemPurchaseSent=false; cachedShop=null;
         begin(RECALL,config.animal); recalled=false;
         if (beast!=null) {
             for (int i=0;i<TradeConfig.ANIMALS.length;i++)
@@ -207,7 +226,10 @@ public final class LiveTrade implements TradeEngine.Port {
     public synchronized boolean cargoShop(mVector items,int id,int type,String title) {
         if (id!=13 || type!=11 || items==null) return false;
         if (!animalCargo(title,items.size())) return false;
-        hiddenShop=true; return true;
+        // Hide only background cargo checks. A selected animal belongs to the
+        // user's interaction and its inventory must remain visible.
+        hiddenShop=beast.ID==cargoRequestAnimal && GameCanvas.loadmap.idMap==cargoRequestMap;
+        return true;
     }
     public synchronized void shop(mVector items,int id,int type) {
         // Trade gems may arrive in either the trade shop or the ordinary potion/material shop.
@@ -296,11 +318,13 @@ public final class LiveTrade implements TradeEngine.Port {
         view.atSeller=Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP) && seller!=null && distance(seller)<=64 && beast!=null && view.distance<=40 && (view.cargo>0 || view.full);
         Event event; while ((event=poll())!=null) process(event,now);
         if (saleSent && (saleAcknowledged || beast==null) && !view.dead && seller!=null && distance(seller)<=64 && view.connected && Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP) && (saleAcknowledged || now-absentAt>=2000)) {
+            if (engine.state==TradeEngine.WAIT_SALE) earnings.complete(saleAmount);
             engine.onSaleConfirmed(true,now); clearIntent(); hadBeast=false; view.cargo=0; view.full=false; view.animalMissing=false;
         }
         if (recalled && beast==null) { intent=0; hadBeast=false; view.animalMissing=false; }
         if (reconnecting && view.cargo>=0) { reconnecting=false; intent=0; }
         engine.tick(view,now);
+        if (engine.state==TradeEngine.TO_SELL && (intent==BUY || intent==QUERY || intent==SUMMON)) clearIntent();
         if (!active()) { clearIntent(); return; }
         if (engine.state==TradeEngine.PAUSED || view.dead) return;
         pump(now);
@@ -332,13 +356,17 @@ public final class LiveTrade implements TradeEngine.Port {
     private void process(Event e,long now) {
         if (e.map!=GameCanvas.loadmap.idMap) return;
         if (e.type==6) {
-            if (beast!=null && beast.ID==e.id && e.id==cargoRequestAnimal) {
-                view.cargo=e.menu; view.cargoRevision++; if (e.menu==0) view.full=false;
+            if (beast!=null && beast.ID==e.id) {
+                view.cargo=e.menu; view.cargoRevision++;
+                // Only authoritative inventory counts, never local purchase estimates.
+                for (int i=0;i<TradeConfig.ANIMALS.length;i++) if (TradeSignals.animal(beast.name,i))
+                    view.full=e.menu>=TradeConfig.MAX_CARGO[i];
+                if (e.menu==0) view.full=false;
                 cargoRequestAnimal=-1;
             }
             return;
         }
-        if (e.text==null && e.type!=4) return;
+        if (e.text==null && e.type!=4 && e.type!=2) return;
         if (teleportEvent(e,now)) return;
         if (e.type==3 && e.sequence!=dialogSequence) return;
         if (e.type==4) {
@@ -394,12 +422,16 @@ public final class LiveTrade implements TradeEngine.Port {
         if (tradeResponse && purchaseSent && TradeSignals.bought(s)) {
             view.cargo=Math.max(0,view.cargo)+1; view.cargoRevision++; purchaseSent=false; intent=0; dismiss(e);
         }
-        if (tradeResponse && saleSent && TradeSignals.sold(s)) { saleAcknowledged=true; dismiss(e); }
+        if (tradeResponse && saleSent && TradeSignals.sold(s)) {
+            long amount=TradeEarnings.amount(e.text);
+            if (amount>=0) saleAmount=amount;
+            saleAcknowledged=true; dismiss(e);
+        }
         if (e.type==2) {
-            if (e.id==-56 && cargoRequestAnimal>=0 && e.choices!=null) {
+            if (e.id==-56 && cargoRequestAnimal>=0 && e.map==cargoRequestMap && e.choices!=null) {
                 for (int i=0;i<e.choices.size();i++) {
                     String label=TradeStock.normalize(((iCommand)e.choices.elementAt(i)).caption);
-                    if ((label.indexOf("hang")>=0 || label.indexOf("thong tin")>=0)
+                    if ((label.indexOf("hanh trang")>=0 || label.indexOf("hang")>=0 || label.indexOf("thong tin")>=0)
                             && !TradeSignals.sell(label) && !TradeSignals.recall(label)) {
                         GlobalService.gI().Dynamic_Menu((short)-56,(byte)e.menu,(byte)i);
                         GameCanvas.menu2.isShowMenu=false; return;
@@ -409,8 +441,6 @@ public final class LiveTrade implements TradeEngine.Port {
             if (e.id==-56) {
                 if (intent==RECALL) {
                     menu=e.choices; menuId=e.menu; menuNpc=e.id; menuAt=now;
-                } else {
-                    if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu) GameCanvas.menu2.isShowMenu=false;
                 }
             } else {
                 boolean expected=buyer!=null && e.id==buyer.getIDnpc() && (intent==BUY || intent==SUMMON)
@@ -424,8 +454,10 @@ public final class LiveTrade implements TradeEngine.Port {
         if (tradeResponse && e.type==3 && e.dialog==GameCanvas.currentDialog && e.choices!=null
                 && !view.dead && engine.state!=TradeEngine.PAUSED && !TradeConfig.tradingClosed(now)) {
             boolean confirm=intent==SELL && saleSent && TradeSignals.sell(s)
-                    || intent==RECALL && recalled && (TradeSignals.recall(s) || TradeSignals.animalUseConfirmation(s))
-                    || intent==SUMMON && summoned && (TradeSignals.animal(s,config.animal) || TradeSignals.animalUseConfirmation(s))
+                    || intent==RECALL && recalled && (TradeSignals.recall(s) || TradeSignals.animalUseConfirmation(s)
+                        || TradeSignals.replaceAnimalConfirmation(e.text))
+                    || intent==SUMMON && summoned && (TradeSignals.animal(s,config.animal) || TradeSignals.animalUseConfirmation(s)
+                        || TradeSignals.replaceAnimalConfirmation(e.text))
                     || intent==BUY && (purchaseSent || itemPurchaseSent) && (TradeSignals.gem(s,argument) || s.indexOf("mua")>=0 || s.indexOf("da quy")>=0 || s.indexOf("hang")>=0)
                     || TradeSignals.startTradeConfirmation(e.text)
                         && (intent==SUMMON && summoned || intent==BUY && buyer!=null);
