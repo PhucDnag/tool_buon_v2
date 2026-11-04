@@ -207,6 +207,7 @@ namespace PhucHsoManager
         public bool ShowGuide { get; set; }
         public bool FakeName { get; set; }
         public bool SilentBuy { get; set; }
+        public bool LowDetail { get; set; }
         public bool AutoAttack { get; set; }
         public bool AutoHeal { get; set; }
         public bool AutoLoot { get; set; }
@@ -219,6 +220,7 @@ namespace PhucHsoManager
         [ScriptIgnore] public long SessionGold { get; set; }
         [ScriptIgnore] public long SessionUnmeasured { get; set; }
         [ScriptIgnore] public bool Background { get; set; }
+        [ScriptIgnore] public List<IntPtr> HiddenWindows = new List<IntPtr>();
         public bool ReadTradeSnapshot(string text)
         {
             string[] parts = text.Trim().Split(':');
@@ -273,6 +275,7 @@ namespace PhucHsoManager
             ShowGuide = true;
             FakeName = true;
             SilentBuy = true;
+            LowDetail = true;
             AutoAttack = false;
             AutoHeal = true;
             AutoLoot = true;
@@ -328,6 +331,23 @@ namespace PhucHsoManager
 
         [DllImport("user32.dll")]
         public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint message, IntPtr wParam, string text, uint flags, uint timeout, out IntPtr result);
+        public static void RenameWindow(IntPtr handle, string title) {
+            IntPtr result;
+            SendMessageTimeout(handle, 0x000C, IntPtr.Zero, title, 0x0002, 100, out result);
+        }
+        public static List<IntPtr> VisibleWindows(int pid) {
+            var result = new List<IntPtr>();
+            EnumWindows(delegate(IntPtr h, IntPtr unused) {
+                uint owner; GetWindowThreadProcessId(h, out owner);
+                if (owner == pid && IsWindowVisible(h)) result.Add(h);
+                return true;
+            }, IntPtr.Zero);
+            return result;
+        }
 
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -583,6 +603,7 @@ namespace PhucHsoManager
             AddExtraSetting(tab3, "ShowGuide", "Hiện đường chỉ thú buôn", Account.ShowGuide, ref extraY);
             AddExtraSetting(tab3, "FakeName", "Hiện tên giả PhucHso", Account.FakeName, ref extraY);
             AddExtraSetting(tab3, "SilentBuy", "Ẩn hộp thoại mua khi auto buôn", Account.SilentBuy, ref extraY);
+            AddExtraSetting(tab3, "LowDetail", "Giảm lag: ẩn người/hiệu ứng, map ô vuông", Account.LowDetail, ref extraY);
             tab3.Controls.Add(new Label { Text = "Tên thú cưỡi (để trống: tự chọn trong túi):", Left = 20, Top = extraY, Width = 440 });
             txtMountName = new TextBox { Text = Account.MountName ?? "", Left = 20, Top = extraY + 26, Width = 430 };
             tab3.Controls.Add(txtMountName);
@@ -636,6 +657,7 @@ namespace PhucHsoManager
             Account.ShowGuide = extraSettings["ShowGuide"].Checked;
             Account.FakeName = extraSettings["FakeName"].Checked;
             Account.SilentBuy = extraSettings["SilentBuy"].Checked;
+            Account.LowDetail = extraSettings["LowDetail"].Checked;
             Account.AutoAttack = extraSettings["AutoAttack"].Checked;
             Account.AutoHeal = extraSettings["AutoHeal"].Checked;
             Account.AutoLoot = extraSettings["AutoLoot"].Checked;
@@ -1095,6 +1117,19 @@ namespace PhucHsoManager
             };
 
             dgvAccounts.CellFormatting += DgvAccounts_CellFormatting;
+            dgvAccounts.CurrentCellDirtyStateChanged += delegate {
+                if (!dgvAccounts.IsCurrentCellDirty || dgvAccounts.CurrentCell == null) return;
+                int column = dgvAccounts.CurrentCell.ColumnIndex;
+                if (column != 0 && column != 8) return;
+                DataGridViewCell cell = dgvAccounts.CurrentCell;
+                AccountItem item = cell.OwningRow.DataBoundItem as AccountItem;
+                dgvAccounts.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                dgvAccounts.EndEdit();
+                if (item == null) return;
+                bool enabled = Convert.ToBoolean(cell.Value);
+                if (column == 8) ApplyAccountAuto(item, enabled);
+                else { item.Selected = enabled; SaveAccounts(); }
+            };
             dgvAccounts.SelectionChanged += delegate { ShowSelectedAccount(); };
             dgvAccounts.CurrentCellChanged += delegate { ShowSelectedAccount(); };
             dgvAccounts.CellDoubleClick += delegate (object sender, DataGridViewCellEventArgs e) { if (e.RowIndex >= 0) EditSelected(); };
@@ -1205,8 +1240,7 @@ namespace PhucHsoManager
                         if (acc.WindowHandle != IntPtr.Zero)
                         {
                             string title = string.Format("Knight Online [{0}] - {1} ({2})", acc.Id, acc.DisplayName, FormatSlot(acc.CharacterSlot));
-                            if (settings.RenameWindowTitle) Win32.SetWindowText(acc.WindowHandle, title);
-                            if (acc.Background) Win32.ShowWindow(acc.WindowHandle, 0);
+                            if (settings.RenameWindowTitle) Win32.RenameWindow(acc.WindowHandle, title);
                         }
                     }
                 }
@@ -1233,7 +1267,12 @@ namespace PhucHsoManager
 
             lblSummary.Text = string.Format("Tổng: {0} nick | Đang chạy: {1} | Đã chọn: {2}",
                 accounts.Count, runningCount, accounts.FindAll(delegate (AccountItem a) { return a.Selected; }).Count);
-            if (statisticsChanged) SaveAccounts();
+            foreach (var acc in accounts) if (acc.IsRunning && acc.Background) ApplyWindowVisibility(acc, false);
+            if (statisticsChanged)
+            {
+                SaveAccounts();
+                dgvAccounts.Refresh();
+            }
             decimal totalGold = 0, unmeasured = 0;
             foreach (var acc in accounts) { totalGold += acc.TradeGold; unmeasured += acc.UnmeasuredSales; }
             lblGold.Text = string.Format("Tổng vàng bán hàng: {0:N0} (chưa trừ vốn) | Chuyến chưa rõ số vàng: {1:N0}", totalGold, unmeasured);
@@ -1283,6 +1322,13 @@ namespace PhucHsoManager
                 }
             }
 
+            // Trade gold column (col index 13)
+            if (e.ColumnIndex == 13 || (e.ColumnIndex >= 0 && e.ColumnIndex < dgvAccounts.Columns.Count && dgvAccounts.Columns[e.ColumnIndex].Name == "TradeGold"))
+            {
+                e.Value = acc.TradeGold.ToString("N0");
+                e.FormattingApplied = true;
+            }
+
             // Uptime column (col index 11)
             if (e.ColumnIndex == 11)
             {
@@ -1323,10 +1369,10 @@ namespace PhucHsoManager
             if (!acc.IsRunning) return;
             acc.WindowHandle = AccountWindow(acc);
             acc.Background = false;
-            WriteRuntimeSettings(acc);
+            QueueRuntimeSettings(acc);
             if (acc.WindowHandle != IntPtr.Zero)
             {
-                Win32.ShowWindow(acc.WindowHandle, Win32.SW_RESTORE);
+                ApplyWindowVisibility(acc, true);
                 Win32.SetForegroundWindow(acc.WindowHandle);
             }
             ShowSelectedAccount();
@@ -1334,6 +1380,7 @@ namespace PhucHsoManager
 
         private void LaunchSelected()
         {
+            dgvAccounts.EndEdit();
             AccountItem acc = GetSelectedAccount();
             if (acc == null)
             {
@@ -1346,6 +1393,7 @@ namespace PhucHsoManager
 
         private void LaunchChecked()
         {
+            dgvAccounts.EndEdit();
             if (isBatchLaunching)
             {
                 MessageBox.Show("Đang trong quá trình khởi chạy hàng loạt!", "Chờ", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1512,6 +1560,7 @@ namespace PhucHsoManager
                 vmArgs.Add("-Dphuc.visual=" + (acc.ShowGuide ? "1" : "0"));
                 vmArgs.Add("-Dphuc.fakename=" + (acc.FakeName ? "1" : "0"));
                 vmArgs.Add("-Dphuc.silentbuy=" + (acc.SilentBuy ? "1" : "0"));
+                vmArgs.Add("-Dphuc.lowdetail=" + (acc.LowDetail ? "1" : "0"));
                 vmArgs.Add("-Dphuc.mountname=\"" + (acc.MountName ?? "").Replace("\"", "") + "\"");
 
                 if (!string.IsNullOrEmpty(acc.Server))
@@ -1563,6 +1612,11 @@ namespace PhucHsoManager
         {
             AccountItem acc = GetSelectedAccount();
             if (acc == null) { lblStatus.Text = "Chọn tài khoản để bật/dừng auto."; return; }
+            ApplyAccountAuto(acc, enabled);
+        }
+
+        private void ApplyAccountAuto(AccountItem acc, bool enabled)
+        {
             try
             {
                 if (acc.IsRunning)
@@ -1673,10 +1727,41 @@ namespace PhucHsoManager
                 if (!acc.IsRunning) continue;
                 IntPtr handle = AccountWindow(acc);
                 acc.Background = !visible;
-                WriteRuntimeSettings(acc);
-                if (handle != IntPtr.Zero) Win32.ShowWindow(handle, visible ? Win32.SW_RESTORE : 0);
+                ApplyWindowVisibility(acc, visible);
+                QueueRuntimeSettings(acc);
             }
             lblStatus.Text = visible ? "Đã hiện tất cả game." : "Đã ẩn tất cả game; auto vẫn chạy nền.";
+        }
+
+        private void QueueRuntimeSettings(AccountItem acc)
+        {
+            ThreadPool.QueueUserWorkItem(delegate {
+                try { lock (acc) { WriteRuntimeSettings(acc); } }
+                catch (Exception ex) {
+                    try { if (!IsDisposed && IsHandleCreated) BeginInvoke(new MethodInvoker(delegate {
+                        lblStatus.Text = "Đã gửi lệnh cửa sổ; chưa lưu được chế độ tiết kiệm CPU: " + ex.Message;
+                    })); } catch (InvalidOperationException) { }
+                }
+            });
+        }
+
+        private void ApplyWindowVisibility(AccountItem acc, bool visible)
+        {
+            if (!acc.IsRunning) return;
+            int pid = acc.Process.Id;
+            if (!visible) {
+                foreach (IntPtr h in Win32.VisibleWindows(pid)) {
+                    if (!acc.HiddenWindows.Contains(h)) acc.HiddenWindows.Add(h);
+                    Win32.ShowWindowAsync(h, 0);
+                }
+            } else {
+                if (acc.WindowHandle != IntPtr.Zero && !acc.HiddenWindows.Contains(acc.WindowHandle)) acc.HiddenWindows.Add(acc.WindowHandle);
+                foreach (IntPtr h in acc.HiddenWindows) {
+                    uint owner; Win32.GetWindowThreadProcessId(h, out owner);
+                    if (owner == pid && Win32.IsWindow(h)) Win32.ShowWindowAsync(h, Win32.SW_RESTORE);
+                }
+                acc.HiddenWindows.Clear();
+            }
         }
 
         private void TileWindows()
@@ -1705,7 +1790,7 @@ namespace PhucHsoManager
             for (int i = 0; i < count; i++)
             {
                 IntPtr h = handles[i];
-                Win32.ShowWindow(h, Win32.SW_RESTORE);
+                Win32.ShowWindowAsync(h, Win32.SW_RESTORE);
                 Rectangle box = layout[i];
                 Win32.MoveWindow(h, box.X, box.Y, box.Width, box.Height, true);
             }
@@ -1802,6 +1887,7 @@ namespace PhucHsoManager
                 ShowGuide = acc.ShowGuide,
                 FakeName = acc.FakeName,
                 SilentBuy = acc.SilentBuy,
+                LowDetail = acc.LowDetail,
                 AutoAttack = acc.AutoAttack,
                 AutoHeal = acc.AutoHeal,
                 AutoLoot = acc.AutoLoot,

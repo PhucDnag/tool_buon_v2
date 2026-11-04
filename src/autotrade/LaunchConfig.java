@@ -19,6 +19,7 @@ public final class LaunchConfig {
         c.teleport=flag("teleport",c.teleport); c.hud=flag("hud",c.hud);
         c.visual=flag("visual",c.visual); c.fakeName=flag("fakename",c.fakeName);
         c.silentBuy=flag("silentbuy",c.silentBuy);
+        c.lowDetail=flag("lowdetail",c.lowDetail);
         String mount=System.getProperty("phuc.mountname");
         if (mount!=null) { c.mountName=mount.trim(); c.mountItem=-1; }
     }

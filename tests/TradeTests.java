@@ -20,6 +20,7 @@ public final class TradeTests {
         public void resurrect() { resurrects++; }
         public void resurrectVillage() {}
         public void resetLostTrip() {}
+        public boolean hasLostTrip() { return false; }
         public void notifyUser(String t) {}
     }
     private static TradeEngine begin(Port p,TradeEngine.View v) {
@@ -67,6 +68,54 @@ public final class TradeTests {
         g.add("A","B",10,20); check(g.size()==5 && g.next("A","C").x==10,"Updated exit replaces old coordinates");
 
         TradeConfig fixedConfig=new TradeConfig(); fixedConfig.market=1; fixedConfig.rotateMarkets=false;
+        Port retryPort=new Port(); TradeEngine.View retryView=new TradeEngine.View();
+        TradeEngine retryEngine=new TradeEngine(new TradeConfig(),retryPort); retryEngine.start(0);
+        retryView.animal=true; retryView.cargo=3; retryView.hp=retryView.maxHp=100;
+        retryEngine.state=TradeEngine.SELL; retryView.atSeller=false; retryEngine.tick(retryView,0);
+        check(retryPort.sells==0 && retryEngine.state==TradeEngine.TO_SELL,"Recheck range between approach and sale");
+        retryView.atSeller=true; retryEngine.tick(retryView,1000); retryEngine.tick(retryView,2000);
+        check(retryPort.sells==1,"First sale after range check");
+        retryEngine.tick(retryView,21000); check(retryPort.sells==1,"No rapid duplicate sale");
+        retryEngine.tick(retryView,23000);
+        check(retryEngine.state==TradeEngine.TO_SELL,"Timed out sale returns to approach");
+        retryEngine.tick(retryView,25000); retryEngine.tick(retryView,26000);
+        check(retryPort.sells==2,"Retry first unconfirmed sale with cargo still present");
+        retryEngine.tick(retryView,47000); retryEngine.tick(retryView,49000); retryEngine.tick(retryView,50000);
+        check(retryPort.sells==3,"Third attempt allowed");
+        retryEngine.tick(retryView,71000);
+        check(retryEngine.state==TradeEngine.STOP && retryPort.sells==3,"Stop after bounded retries rather than hanging or spamming");
+        for (int cargo=0;cargo<2;cargo++) {
+            TradeConfig lastConfig=new TradeConfig(); lastConfig.market=2;
+            Port lastPort=new Port(); TradeEngine.View lastView=new TradeEngine.View(); lastView.market=2;
+            lastView.animal=true; lastView.cargo=cargo; lastView.hp=lastView.maxHp=100;
+            TradeEngine lastEngine=new TradeEngine(lastConfig,lastPort); lastEngine.start(0); lastEngine.tick(lastView,0);
+            lastEngine.onStock(2,lastEngine.stockRequest(),"Ta hết hàng rồi",100); lastEngine.tick(lastView,1000);
+            if (cargo==0) {
+                check(lastEngine.state==TradeEngine.RECALL,"Recall empty animal before returning to first market");
+                lastEngine.tick(lastView,2000); lastView.animal=false; lastEngine.tick(lastView,3000);
+            } else {
+                check(lastEngine.state==TradeEngine.TO_SELL,"Preserve cargo and sell before restock wait");
+                lastView.atSeller=true; lastEngine.tick(lastView,2000); lastEngine.tick(lastView,3000);
+                lastEngine.onSaleConfirmed(true,4000);
+            }
+            check(lastEngine.market==0 && lastEngine.state==TradeEngine.BACKOFF,"After recall/sale return to first market for restock");
+        }
+        for (int rotate=0;rotate<2;rotate++) {
+            TradeConfig lastConfig=new TradeConfig(); lastConfig.market=2; lastConfig.rotateMarkets=rotate==1;
+            Port lastPort=new Port(); TradeEngine.View lastView=new TradeEngine.View(); lastView.market=2;
+            TradeEngine lastEngine=new TradeEngine(lastConfig,lastPort); lastEngine.start(0); lastEngine.tick(lastView,0);
+            lastEngine.onStock(2,lastEngine.stockRequest(),"Ta hết hàng rồi",100); lastEngine.tick(lastView,1000);
+            check(lastEngine.market==0 && lastEngine.state==TradeEngine.BACKOFF,"Last market empty returns to first even when starting at last market");
+            lastView.market=0; lastEngine.tick(lastView,2000);
+            int queryCount=lastPort.queries; lastEngine.tick(lastView,61000);
+            check(lastPort.queries==queryCount,"Wait sixty seconds at first market");
+            lastEngine.tick(lastView,63000);
+            lastEngine.onStock(0,lastEngine.stockRequest(),"Ta hết hàng rồi",63100); lastEngine.tick(lastView,64000);
+            check(lastEngine.market==0 && lastEngine.state==TradeEngine.STOCK,"Stay at first instead of cycling again");
+            lastEngine.tick(lastView,125000);
+            lastEngine.onStock(0,lastEngine.stockRequest(),"Kim Cương: 5, Rubi: 5, Saphia: 5",125100); lastEngine.tick(lastView,126000);
+            check(lastEngine.state==TradeEngine.SUMMON && lastPort.summons==1,"New stock resumes normal purchase flow");
+        }
         Port fixedPort=new Port(); TradeEngine.View fixedView=new TradeEngine.View(); fixedView.market=1;
         TradeEngine fixedEngine=new TradeEngine(fixedConfig,fixedPort); fixedEngine.start(0); fixedEngine.tick(fixedView,0);
         fixedEngine.onStock(1,fixedEngine.stockRequest(),"Kim Cương: 0, Rubi: 0, Saphia: 0",100);

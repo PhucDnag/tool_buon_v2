@@ -239,6 +239,11 @@ Chỉ dùng `AccountManager.exe` và `dist/KnightOnline_PhucHso_v2.jar`; build l
 Ô mật khẩu trong Sửa tài khoản luôn trống, không có nút xem. Để trống để giữ mật khẩu hiện có; nhập để thay mới. Khi quản lí nạp tài khoản cũ, mật khẩu rõ trong JSON được chuyển sang dữ liệu Windows DPAPI theo người dùng hiện tại. Chuyển sang máy hoặc tài khoản Windows khác cần nhập lại mật khẩu. Cơ chế này ngăn xem mật khẩu trong giao diện và file JSON; không bảo đảm bí mật trước quản trị viên hoặc chương trình chạy dưới cùng tài khoản Windows có thể đọc bộ nhớ/giải mã DPAPI.
 # Quản lý nhiều cửa sổ và bộ nhớ
 
+- **Giảm lag** mặc định bật: vào **Cấu hình tool → Di chuyển & hiển thị** trong manager hoặc **MENU TOOL → Giao diện & Tiện ích** trong game để bật/tắt. Ẩn người chơi khác, bỏ nền/đồ trang trí và hiệu ứng; giữ nhân vật của bạn, NPC, quái, vật phẩm và thú buôn. Ô đi được có viền vuông, vật cản để trống theo dữ liệu va chạm của map. Chỉ vẽ vùng đang nhìn thấy; không thay dữ liệu di chuyển hoặc nhịp auto. Thay đổi trong game áp dụng ngay; cấu hình manager áp dụng ở lần mở game sau.
+
+- Khi Vách Đá Cheo Leo báo hết hàng (hoặc đã kiểm tra hết cả ba bãi), auto quay về Cổng Địa Ngục và kiểm tra hàng mỗi 60 giây cho đến khi mua được. Quy tắc Vách Đá áp dụng cả khi tắt đổi bãi. Thú còn hàng được đưa đi bán trước; thú rỗng được thu hồi trước khi quay về.
+- Bản sửa ẩn cửa sổ dùng `ShowWindowAsync`, theo dõi cả cửa sổ phụ của game và ghi cài đặt nền ngoài luồng giao diện. Java đang treo vẫn có thể nhận lệnh ẩn chậm, nhưng manager không chờ nó xử lý lệnh.
+
 - **Ẩn tất cả / Hiện tất cả**: ẩn cửa sổ game để chạy nền và hiện lại. Auto và kết nối vẫn hoạt động; phần vẽ hình khi ẩn được giới hạn tối đa 1 lần/giây. F5 trên dòng đang chạy cũng hiện lại game đó. Khi thoát manager mà giữ game, các cửa sổ sẽ được hiện lại.
 - **Tắt tất cả game**: dừng mọi game do manager hiện tại quản lý. **Xếp cửa sổ (F9)** hiện và xếp các game sát nhau trên màn hình chứa manager.
 - **Cài đặt → Thu gom RAM (phút)**: mặc định 10 phút, 0 để tắt, tối đa 120 phút. Áp dụng ngay cho các game đang mở bằng bản mới. Client yêu cầu Java thu gom đối tượng không còn dùng khi auto rảnh; không xóa dữ liệu game hoặc ép Windows đẩy RAM ra đĩa. Việc giảm RAM thực tế phụ thuộc JVM và tải game.

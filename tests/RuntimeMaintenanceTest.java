@@ -22,6 +22,8 @@ public final class RuntimeMaintenanceTest {
         check(maintenance.paint(2001) && maintenance.paint(2002),"Visible rendering restored immediately");
         write(control+".runtime","broken"); maintenance.update(3000,control,earnings,false);
         check(maintenance.paint(3001),"Incomplete settings preserve prior state");
+        maintenance.checkMemory(4000);
+        maintenance.onMapChange(5000);
         System.out.println("PASS earnings parsing, telemetry, hidden/visible rendering");
     }
 }

@@ -16,6 +16,10 @@ public final class ReconnectPolicyTest {
         check(!ReconnectPolicy.shouldLogin(false,false,29999,30000), "respect backoff");
         check(ReconnectPolicy.shouldLogin(false,false,30000,30000), "retry disconnected socket when due");
         autotrade.EntryGate gate=new autotrade.EntryGate();
+        check(autotrade.EntryGate.inWorld(true,true,true,true,false), "Actual loaded game is sufficient without selection-screen flag");
+        check(!autotrade.EntryGate.inWorld(true,true,true,false,false), "Do not start on unloaded map");
+        check(!autotrade.EntryGate.inWorld(false,true,true,true,false), "Do not start with stale offline world");
+        check(!autotrade.EntryGate.inWorld(true,true,true,true,true), "Reconnect must finish before auto starts");
         check(!gate.ready(true,0), "no tool traffic on first game tick");
         check(!gate.ready(true,4999), "wait for stable entry");
         check(gate.ready(true,5000), "resume after entry settles");

@@ -40,6 +40,7 @@ public final class ClientMod {
     private static boolean resumePending;
     private static final ManagerControl managerControl=new ManagerControl();
     private static final RuntimeMaintenance maintenance=new RuntimeMaintenance();
+    private static long lastNetworkActivity;
     public static boolean shouldPaint() { return maintenance.paint(System.currentTimeMillis()); }
     private static void pollManager(long now) {
         int command=managerControl.poll(System.getProperty("phuc.control"),now);
@@ -132,6 +133,7 @@ public final class ClientMod {
             if (in.available()>=5) { config.resumeTrade=in.readBoolean(); config.savedCharacter=in.readInt(); }
             if (in.available()>=4) { config.charSlot=in.readInt(); }
             if (in.available()>=1) { config.silentBuy=in.readBoolean(); }
+            if (in.available()>=1) { config.lowDetail=in.readBoolean(); }
             charId=config.savedCharacter; resumePending=config.resumeTrade;
         } catch (Exception e) { status="Không đọc được cấu hình; dùng mặc định"; }
     }
@@ -144,7 +146,7 @@ public final class ClientMod {
             out.writeInt(config.mountItem); out.writeUTF(config.mountName);
             out.writeInt(config.reviveMinMs); out.writeInt(config.reviveMaxMs);
             out.writeBoolean(config.resumeTrade); out.writeInt(config.savedCharacter);
-            out.writeInt(config.charSlot); out.writeBoolean(config.silentBuy); out.flush(); CRes.saveRMS("phuc_trade_v1",bytes.toByteArray());
+            out.writeInt(config.charSlot); out.writeBoolean(config.silentBuy); out.writeBoolean(config.lowDetail); out.flush(); CRes.saveRMS("phuc_trade_v1",bytes.toByteArray());
         } catch (Exception e) { status="Không lưu được cấu hình"; }
     }
     private static String on(boolean value) { return value ? "Bật" : "Tắt"; }
@@ -165,13 +167,25 @@ public final class ClientMod {
     }
     public static void menu() {
         init(); mVector items=new mVector("PhucHso");
-        add(items,"Auto buôn: "+(live.active() ? "[BẬT]" : "[TẮT]"),1);
+        add(items,autoCaption(),1);
         add(items,"Cài đặt Đi Buôn >",20);
         add(items,"Di chuyển nhanh >",21);
         add(items,"Hỗ trợ nhân vật >",22);
         add(items,"Giao diện & Tiện ích >",23);
         add(items,"Dừng mọi di chuyển",13);
         GameCanvas.menu2.startAt(items,2,"Tool PhucHso",false,null);
+    }
+    private static String autoCaption() {
+        return "Auto buôn: "+(live.active() ? "[BẬT]" : resumePending ? "[CHỜ VÀO MAP]" : "[TẮT]");
+    }
+    private static void refreshAutoCaption() {
+        if (GameCanvas.menu2==null || !GameCanvas.menu2.isShowMenu || GameCanvas.menu2.menuItems==null) return;
+        for (int i=0;i<GameCanvas.menu2.menuItems.size();i++) {
+            iCommand c=(iCommand)GameCanvas.menu2.menuItems.elementAt(i);
+            if (c!=null && c.caption!=null && c.caption.startsWith("Auto buôn: ")) {
+                String caption=autoCaption(); if (!caption.equals(c.caption)) c.caption=caption;
+            }
+        }
     }
     public static void menuTradeConfig() {
         init(); mVector items=new mVector("Cài đặt buôn");
@@ -214,6 +228,7 @@ public final class ClientMod {
         add(items,"HUD thông tin: "+on(config.hud),6);
         add(items,"Đường chỉ thú buôn: "+on(config.visual),7);
         add(items,"Tên giả PhucHso: "+on(config.fakeName),8);
+        add(items,"Giảm lag (ẩn người/hiệu ứng, map ô): "+on(config.lowDetail),43);
         add(items,"Ghi log dữ liệu: "+on(diagnostics),14);
         add(items,"Xem log NPC gần nhất",15);
         add(items,"< Quay lại",0);
@@ -262,6 +277,7 @@ public final class ClientMod {
             case 40: if (GameCanvas.game!=null) GameCanvas.game.commandPointer(16,0); menuSupport(); return;
             case 41: if (GameCanvas.game!=null) GameCanvas.game.commandPointer(19,0); menuSupport(); return;
             case 42: if (GameCanvas.game!=null) GameCanvas.game.commandPointer(18,0); menuSupport(); return;
+            case 43: config.lowDetail=!config.lowDetail; save(); menuUiUtils(); return;
         }
         menu();
     }
@@ -340,6 +356,7 @@ public final class ClientMod {
     }
     public static void tick() {
         init();
+        refreshAutoCaption();
         if (openMenuPending) {
             openMenuPending=false;
             if (!toolInputAvailable()) return;
@@ -356,6 +373,18 @@ public final class ClientMod {
         maintenance.update(now,System.getProperty("phuc.control"),live.earnings,
                 !Session_ME.gI().connecting && GameCanvas.currentDialog==null && !reconnecting
                 && (!live.active() || live.engine.state==TradeEngine.PAUSED || live.engine.state==TradeEngine.STOCK));
+        maintenance.checkMemory(now);
+        if (live.active() && Session_ME.gI().isConnected() && GameCanvas.currentScreen==GameCanvas.game && !reconnecting) {
+            if (lastNetworkActivity==0) lastNetworkActivity=now;
+            if (now-lastNetworkActivity>90000L) {
+                ConnectionTrace.event("STALL_TIMEOUT");
+                lastNetworkActivity=now;
+                try { Session_ME.gI().close(); } catch (Throwable ignored) {}
+                disconnected();
+            }
+        } else {
+            lastNetworkActivity=now;
+        }
         try {
             pollManager(now);
             if (GameCanvas.currentScreen==GameCanvas.selectChar) {
@@ -403,8 +432,8 @@ public final class ClientMod {
                 reconnecting=true; selectionSent=false; reconnectAt=now+1000;
             }
             reconnect(now);
-            boolean inGame=GameScreen.player!=null && Session_ME.gI().isConnected()
-                    && !reconnecting && GameCanvas.currentScreen==GameCanvas.game && SelectCharScreen.isSelectOk;
+            boolean inGame=EntryGate.inWorld(Session_ME.gI().isConnected(),GameCanvas.currentScreen==GameCanvas.game,
+                    GameScreen.player!=null,GameCanvas.loadmap!=null && GameCanvas.loadmap.mapW>0 && GameCanvas.loadmap.mapH>0,reconnecting);
             if (inGame && !entryObserved) ConnectionTrace.event("ENTER_GAME map="+GameCanvas.loadmap.idMap);
             entryObserved=inGame;
             if (!entryGate.ready(inGame,now)) { animal=null; return; }
@@ -416,7 +445,10 @@ public final class ClientMod {
             }
             animal=OwnedAnimal.find(p,GameScreen.Vecplayers);
             live.navigation.observe(now);
-            if (resumePending && GameCanvas.currentScreen==GameCanvas.game) { resumePending=false; if (!live.active()) live.toggle(now); }
+            if (resumePending && GameCanvas.currentScreen==GameCanvas.game) {
+                if (!live.active()) live.toggle(now);
+                if (live.active()) { resumePending=false; config.resumeTrade=true; save(); }
+            }
             boolean wasActive=live.active();
             live.tick(animal,now);
             if (wasActive && !live.active()) { config.resumeTrade=false; save(); status=live.engine.status; }
@@ -432,6 +464,8 @@ public final class ClientMod {
             if (GameCanvas.currentScreen!=GameCanvas.game) return;
             if (GameCanvas.loadmap.idMap!=lastMap) {
                 lastMap=GameCanvas.loadmap.idMap;
+                maintenance.onMapChange(now);
+                lastNetworkActivity=now;
                 for (int i=0;i<LoadMap.vecPointChange.size();i++) {
                     Point point=(Point)LoadMap.vecPointChange.elementAt(i);
                     graph.add(GameCanvas.loadmap.nameMap,point.name,point.x,point.y);
@@ -450,16 +484,33 @@ public final class ClientMod {
                     }
                 }
             }
-            if (config.autoMount && config.mountItem>=0 && p.typeMount==-1 && p.hp>0 && animal==null && now>=nextMount
+            boolean suppressMount = live.active() && (
+                    live.engine.state == TradeEngine.REPLACE
+                    || live.engine.state == TradeEngine.WAIT_REPLACE
+                    || live.engine.state == TradeEngine.WAIT_NEW
+                    || live.engine.state == TradeEngine.SUMMON
+                    || live.engine.state == TradeEngine.BUY
+                    || live.engine.state == TradeEngine.WAIT_BUY
+                    || live.engine.state == TradeEngine.STOCK
+                    || live.view.gemDrops
+                    || live.intent == LiveTrade.SUMMON
+            );
+            if (config.autoMount && config.mountItem>=0 && p.typeMount==-1 && p.hp>0 && animal==null && !suppressMount && now>=nextMount
                     && !GameCanvas.menu2.isShowMenu && GameCanvas.currentDialog==null) {
                 nextMount=now+15000; GlobalService.gI().Use_Potion((short)config.mountItem);
             }
-            if (p.typeMount != -1 && (animal != null || (live.active() && (live.engine.state == TradeEngine.BUY || live.engine.state == TradeEngine.WAIT_BUY || live.engine.state == TradeEngine.TO_SELL)))
-                    && now >= nextDismount && !GameCanvas.menu2.isShowMenu && GameCanvas.currentDialog == null) {
+            boolean mustDismount = p.typeMount != -1 && (animal != null || suppressMount || (live.active() && live.engine.state == TradeEngine.TO_SELL));
+            if (mustDismount && now >= nextDismount && !GameCanvas.menu2.isShowMenu && GameCanvas.currentDialog == null) {
                 nextDismount = now + 1500;
                 GlobalService.gI().useMount((byte)-1);
             }
-        } catch (Exception e) { status="Tool tạm dừng: "+e.getClass().getName(); route=null; live.engine.stop(); config.resumeTrade=false; save(); e.printStackTrace(); }
+        } catch (Throwable e) {
+            String name = e.getClass().getName();
+            int dot = name.lastIndexOf('.');
+            if (dot >= 0) name = name.substring(dot + 1);
+            status = "Lỗi " + name + (e.getMessage() != null ? (": " + e.getMessage()) : "");
+            e.printStackTrace();
+        }
     }
     private static void walk(int x,int y) {
         Player p=GameScreen.player;
@@ -522,6 +573,7 @@ public final class ClientMod {
         SelectionBridge.select(screen,index);
     }
     public static void npcChat(MainObject npc) {
+        lastNetworkActivity=System.currentTimeMillis();
         if (!LiveTrade.isNpc(npc)) return;
         init(); live.chat(npc);
         record("NPC map="+GameCanvas.loadmap.idMap+" id="+npc.ID+" text="+npc.strChatPopup);
@@ -531,12 +583,14 @@ public final class ClientMod {
     }
     public static void stockRequested(int id) { selectedNpc=id; latestStock="Đang chờ NPC "+id; }
     public static void serverMenu(mVector items,int menuId,int npcId,String text) {
+        lastNetworkActivity=System.currentTimeMillis();
         init(); live.menu(items,menuId,npcId,text);
         if (live.hideMenu(npcId)) GameCanvas.menu2.isShowMenu=false;
         record("MENU map="+GameCanvas.loadmap.idMap+" npc="+npcId+" menu="+menuId+" text="+text);
         if (items!=null) for (int i=0;i<items.size();i++) record("OPTION "+i+" "+((iCommand)items.elementAt(i)).caption);
     }
     public static void serverDialog(Object source,String text,mVector commands) {
+        lastNetworkActivity=System.currentTimeMillis();
         init(); live.dialog(source,text,commands);
     }
     public static void serverDialogOne(Object source,String text,iCommand command) {
@@ -544,6 +598,7 @@ public final class ClientMod {
     }
     private static TabScreenNew previousShop;
     public static void serverNamedShop(mVector items,int id,int type,String title) {
+        lastNetworkActivity=System.currentTimeMillis();
         init();
         if (live.cargoShop(items,id,type,title)) { previousShop=GameCanvas.shopNpc; return; }
         serverShop(items,id,type);
@@ -562,16 +617,18 @@ public final class ClientMod {
         if (GameCanvas.game!=null) GameCanvas.game.paint(g);
     }
     public static boolean hideTradeMenu() {
-        // Expected NPC menus are hidden at receipt; manual menus remain interactive.
+        if (live!=null && live.active() && live.isBuying() && GameScreen.ObjFocus!=live.getBeast()) { if (GameCanvas.menu2!=null && LiveTrade.isBeastMenu(GameCanvas.menu2.menuItems)) { GameCanvas.menu2.isShowMenu=false; return true; } }
         return false;
     }
     public static boolean hideTradeDialog(Object dialog) {
         return live!=null && live.hideDialog(dialog);
     }
     public static void finishTradeShop() {
+        lastNetworkActivity=System.currentTimeMillis();
         if (live!=null && live.takeHiddenShop()) { GameCanvas.shopNpc=previousShop; previousShop=null; }
     }
-    public static void serverText(String text) { init(); live.serverText(text); record("SERVER "+text); }
+    public static void serverText(String text) {
+        lastNetworkActivity=System.currentTimeMillis(); init(); live.serverText(text); record("SERVER "+text); }
     private static void record(String line) {
         if (!diagnostics) return;
         System.out.println("[PhucTrade] "+line);
@@ -611,4 +668,10 @@ public final class ClientMod {
         } finally { g.translate(tx,ty); }
     }
     private static void line(mGraphics g,String text,int y) { mFont.tahoma_7_yellow.drawString(g,text,3,y,0,false); }
+    public static boolean hideEffects() { return config.lowDetail && GameCanvas.currentScreen==GameCanvas.game; }
+    public static boolean paintLowDetail(mGraphics g) {
+        init();
+        if (!hideEffects() || GameCanvas.loadmap==null || MainScreen.cameraMain==null || GameScreen.player==null) return false;
+        LowDetailRenderer.paint(g); paint(g); return true;
+    }
 }

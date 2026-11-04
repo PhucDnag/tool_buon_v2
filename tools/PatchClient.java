@@ -63,6 +63,15 @@ public final class PatchClient implements Opcodes {
                         super.visitInsn(opcode);
                     }
                     public void visitCode() {
+                        if (owner.equals("GameScreen/GameScreen") && name.equals("paint") && desc.equals("(LCLib/mGraphics;)V")) {
+                            super.visitVarInsn(ALOAD,1); call("paintLowDetail","(LCLib/mGraphics;)Z");
+                            Label normal=new Label(); super.visitJumpInsn(IFEQ,normal); super.visitInsn(RETURN); super.visitLabel(normal);
+                        }
+                        if (owner.equals("GameObjects/MainObject") && (name.equals("paintDataEff_Top") || name.equals("paintDataEff_Bot")
+                                || name.equals("paintEffauto") || name.equals("paintEffauto_Low") || name.equals("paintBuffFirst")
+                                || name.equals("paintBuffLast") || name.equals("paintEffectCharWearing"))) {
+                            call("hideEffects","()Z"); Label normal=new Label(); super.visitJumpInsn(IFEQ,normal); super.visitInsn(RETURN); super.visitLabel(normal);
+                        }
                         if (owner.equals("Main/GameCanvas") && name.equals("paint") && desc.equals("(LCLib/TemGraphics;)V")) {
                             call("shouldPaint","()Z");
                             Label render=new Label(); super.visitJumpInsn(IFNE,render); super.visitInsn(RETURN); super.visitLabel(render);
@@ -178,7 +187,7 @@ public final class PatchClient implements Opcodes {
         } finally { out.close(); input.close(); }
         String[] required={"traceSend","traceConnect","traceNetworkError","tick","appendMenu","paint","disconnected","serverMenu","displayName","npcChat","npcChat/chat_npc","npcChat/npcInfo","npcChat/chatPopup","stockRequested","serverDialog","serverDialogOne","serverNamedShop","serverText","pointerClick","keyPress","hideTradeShop","hideTradeMenu"};
         for (String hook:required) if (!hits.contains(hook)) throw new IllegalStateException("Missing hook: "+hook);
-        for (String hook:new String[]{"managerLogin/setScreen","managerLogin/loadUser_Pass","prepareManagerLogin","shouldPaint"})
+        for (String hook:new String[]{"managerLogin/setScreen","managerLogin/loadUser_Pass","prepareManagerLogin","shouldPaint","paintLowDetail","hideEffects"})
             if (!hits.contains(hook)) throw new IllegalStateException("Missing hook: "+hook);
         java.nio.file.Files.move(temporary.toPath(),destination.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         System.out.println("Patched hooks: "+hits);

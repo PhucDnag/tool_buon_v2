@@ -19,7 +19,8 @@ public final class LiveTrade implements TradeEngine.Port {
     public final Navigator navigation;
     public final TradeEngine.View view=new TradeEngine.View();
     public final TradeEarnings earnings=new TradeEarnings();
-    private long saleAmount=-1;
+    public long saleAmount=-1;
+    private long goldBeforeSale=-1;
     private final TradeConfig config;
     private final Vector events=new Vector();
     private MainObject beast,buyer,seller;
@@ -27,21 +28,31 @@ public final class LiveTrade implements TradeEngine.Port {
     private int request, sentRequest, queriedNpc=-10000, requestMarket, scanIndex, lastMap=-1, oldBeast=-1;
     private int menuNpc,menuId,shopId,argument;
     private mVector menu,shop;
-    private long menuAt, nextAction, sentAt, absentAt, lastInfo, lastNow;
+    private long menuAt, nextAction, sentAt, absentAt, lastInfo, lastNow, sellStart;
     private boolean summoned, purchaseSent, saleSent, saleAcknowledged, hadBeast, recalled, reconnecting;
     private boolean itemPurchaseSent, leashSecured;
+    public Object activeDialog;
+    public String activeDialogText;
+    public mVector activeDialogChoices;
+    private long saleConfirmedAt;
     private mVector cachedShop;
     private int cachedShopId, cachedMap, cachedNpc;
     private long lastPurchase;
     private Object hiddenDialog;
     private boolean hiddenShop;
-    public boolean hideMenu(int npc) { return active() && intent==BUY && buyer!=null && buyer.getIDnpc()==npc; }
+    public boolean hideMenu(int npc) { return active() && ((intent==BUY && buyer!=null && buyer.getIDnpc()==npc) || (isBuying() && npc==-56 && GameScreen.ObjFocus!=beast)); }
+    public MainObject getBeast() { return beast; }
     public boolean hideDialog(Object dialog) { return active() && dialog!=null && dialog==hiddenDialog; }
+    public static boolean isBeastMenu(mVector items) { if (items==null) return false; for (int i=0;i<items.size();i++) { Object obj=items.elementAt(i); if (obj instanceof iCommand) { String caption=TradeStock.normalize(((iCommand)obj).caption); if (caption.indexOf("hanh trang")>=0 || caption.indexOf("tang toc")>=0 || caption.indexOf("bao ho")>=0 || caption.indexOf("hoi mau")>=0) return true; } } return false; }
+    public static boolean isReviveMenu(mVector items) { if (items==null) return false; for (int i=0;i<items.size();i++) { Object obj=items.elementAt(i); if (obj instanceof iCommand) { String caption=TradeStock.normalize(((iCommand)obj).caption); if (caption.indexOf("vat pham hoi sinh")>=0 || caption.indexOf("thanh gia")>=0) return true; } } return false; }
     public boolean hasHiddenShop() { return hiddenShop; }
     public boolean takeHiddenShop() { boolean result=hiddenShop; hiddenShop=false; return result; }
     public boolean isBuying() { return intent==BUY || engine.state==TradeEngine.BUY || engine.state==TradeEngine.WAIT_BUY; }
     private String lastConfirmedText;
     private String recoveryMap="";
+    public String lastBeastMap="";
+    public int lastBeastX=-1, lastBeastY=-1;
+    private long nextPickup;
     private String teleportTarget,teleportAttempt="";
     private long teleportUntil;
     private int dialogSequence;
@@ -79,13 +90,40 @@ public final class LiveTrade implements TradeEngine.Port {
         hadBeast=false; oldBeast=-1; absentAt=0; summoned=false; recalled=false; reconnecting=false;
         infoAttempts=0; queriedNpc=-10000;
         Player.autoItem=new AutoGetItem((byte)0,(byte)0,(byte)0);
+        if (!resumeBuying && !resumeEscorting) {
+            int charId=GameScreen.player!=null ? GameScreen.player.ID : -1;
+            TradeRecovery.Record rec=TradeRecovery.load(charId,now);
+            if (rec!=null && rec.map!=null && rec.map.length()>0) {
+                lastBeastMap=rec.map;
+                lastBeastX=rec.x;
+                lastBeastY=rec.y;
+                recoveryMap=rec.map;
+                hadBeast=true;
+                view.cargo=rec.cargo;
+                config.market=rec.market;
+                config.gem=rec.gem;
+                config.animal=rec.animal;
+                engine.start(now);
+                if (beast!=null) {
+                    engine.resumeEscort(now);
+                } else {
+                    engine.resumeRecovery(now);
+                    detail="V\u1ec1 map "+lastBeastMap+" t\u00ecm th\u00fa";
+                }
+                return;
+            }
+        }
         engine.start(now);
     }
-    private void clearIntent() { cargoRequestAnimal=-1; intent=0; menu=null; shop=null; cachedShop=null; hiddenShop=false; hiddenDialog=null; lastPurchase=0; purchaseSent=false; itemPurchaseSent=false; saleSent=false; saleAcknowledged=false; lastConfirmedText=null; }
+    private void clearIntent() { sellStart=0; goldBeforeSale=-1; cargoRequestAnimal=-1; intent=0; menu=null; shop=null; cachedShop=null; hiddenShop=false; hiddenDialog=null; lastPurchase=0; purchaseSent=false; itemPurchaseSent=false; saleSent=false; saleAcknowledged=false; saleConfirmedAt=0; lastConfirmedText=null; }
+    public boolean hasLostTrip() { return (recoveryMap!=null && recoveryMap.length()>0) || (lastBeastMap!=null && lastBeastMap.length()>0) || hadBeast; }
     public boolean ready() { return GameScreen.player!=null; }
     public void notifyUser(String text) { detail=text; GameCanvas.addInfoChar(text); }
     public void stopMovement() { Navigator.stop(); }
-    public void goMarket(int index) { travel(TradeConfig.MARKETS[index],lastNow); }
+    public void goMarket(int index) {
+        int idx = (index>=0 && index<TradeConfig.MARKETS.length) ? index : 0;
+        travel(TradeConfig.MARKETS[idx],lastNow);
+    }
     public boolean travel(String target,long now) {
         int targetMap=-1;
         for (int i=0;i<TradeConfig.MARKETS.length;i++) {
@@ -109,8 +147,13 @@ public final class LiveTrade implements TradeEngine.Port {
         boolean arrived=navigation.go(target,targetMap,beast,now); detail=navigation.status; return arrived;
     }
     public synchronized boolean animalCargo(String name,int count) {
-        if (!active() || beast==null
-                || !TradeStock.normalize(name).equals(TradeStock.normalize(beast.name)) || count<0) return false;
+        if (!active() || beast==null || count<0) return false;
+        String normName=TradeStock.normalize(name);
+        String normBeast=TradeStock.normalize(beast.name);
+        boolean isTradeAnimalName=normName.equals(normBeast)
+                || TradeSignals.animal(name,0) || TradeSignals.animal(name,1) || TradeSignals.animal(name,2)
+                || normName.indexOf("hanh trang")>=0 || normName.indexOf("thong tin")>=0 || normName.indexOf("hang")>=0;
+        if (!isTradeAnimalName) return false;
         if (beast!=GameScreen.ObjFocus && (beast.ID!=cargoRequestAnimal || GameCanvas.loadmap.idMap!=cargoRequestMap)) return false;
         Event e=new Event(); e.type=6; e.id=beast.ID; e.menu=count; e.map=GameCanvas.loadmap.idMap; enqueue(e);
         return true;
@@ -122,7 +165,7 @@ public final class LiveTrade implements TradeEngine.Port {
             if (cargoRequestAnimal<0 && GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu) {
                 detail="Chờ bạn đóng menu để tiếp tục kiểm tra hàng"; return;
             }
-            if (cargoRequestAnimal!=beast.ID || cargoRequestMap!=GameCanvas.loadmap.idMap || lastNow-cargoRequestAt>=5000) {
+            if (cargoRequestAnimal!=beast.ID || cargoRequestMap!=GameCanvas.loadmap.idMap || lastNow-cargoRequestAt>=3000) {
                 cargoRequestAnimal=beast.ID; cargoRequestMap=GameCanvas.loadmap.idMap; cargoRequestAt=lastNow;
                 info(lastNow);
             }
@@ -166,18 +209,21 @@ public final class LiveTrade implements TradeEngine.Port {
         intent=action; argument=value; nextAction=lastNow; sentAt=0; menu=null; shop=null; lastConfirmedText=null; itemPurchaseSent=false;
     }
     public void summon(int animal) {
-        if (view.market!=engine.market && engine.state!=TradeEngine.WAIT_REPLACE) return;
-        if (engine.state==TradeEngine.WAIT_REPLACE) { view.cargo=-1; view.full=false; infoAttempts=0; lastInfo=0; }
+        if (view.market!=engine.market && engine.state!=TradeEngine.WAIT_REPLACE && engine.state!=TradeEngine.WAIT_NEW) return;
+        if (engine.state==TradeEngine.WAIT_REPLACE || engine.state==TradeEngine.WAIT_NEW) { view.cargo=-1; view.full=false; infoAttempts=0; lastInfo=0; }
         begin(SUMMON,animal); summoned=false; recalled=false;
     }
     public void buy(int gem) {
         if (view.market!=engine.market) return;
         begin(BUY,gem); purchaseSent=false;
+        if (buyer==null) buyer=findNamed("dylan");
+        if (buyer==null) buyer=findNamed("thuong nhan");
+        if (buyer!=null && GameScreen.ObjFocus==null) GameScreen.ObjFocus=buyer;
         if (cachedShop!=null && cachedMap==GameCanvas.loadmap.idMap) {
             shop=cachedShop; shopId=cachedShopId;
         }
     }
-    public void sell() { begin(SELL,0); saleSent=false; saleAcknowledged=false; saleAmount=-1; }
+    public void sell() { begin(SELL,0); saleSent=false; saleAcknowledged=false; saleAmount=-1; sentAt=0; menu=null; sellStart=lastNow; saleConfirmedAt=0; lastConfirmedText=null; goldBeforeSale=(GameScreen.player!=null ? GameScreen.player.gold : -1); }
     public void recall() {
         purchaseSent=false; itemPurchaseSent=false; cachedShop=null;
         begin(RECALL,config.animal); recalled=false;
@@ -188,18 +234,53 @@ public final class LiveTrade implements TradeEngine.Port {
         }
     }
     public void recoverPreviousMap() {
-        if (recoveryMap.length()>0) navigation.go(recoveryMap,-1,null,lastNow);
-        detail="Tìm thú ở "+recoveryMap;
+        if (recoveryMap!=null && recoveryMap.length()>0) {
+            if (GameCanvas.loadmap!=null && Navigator.same(GameCanvas.loadmap.nameMap,recoveryMap)) {
+                if (lastBeastX>0 && lastBeastY>0) navigation.walk(lastBeastX,lastBeastY,2,null,lastNow);
+                detail="Tìm thú trong "+recoveryMap;
+            } else {
+                navigation.go(recoveryMap,-1,null,lastNow);
+                detail="Về map "+recoveryMap+" tìm thú";
+            }
+        }
     }
     public void followAnimal() { if (beast!=null) navigation.walk(beast.x,beast.y,2,null,lastNow); }
+    public boolean hasReviveItem() { return findReviveItem() != null; }
+    public static Item findReviveItem() {
+        if (Item.VecInvetoryPlayer == null) return null;
+        for (int i = 0; i < Item.VecInvetoryPlayer.size(); i++) {
+            Item item = (Item) Item.VecInvetoryPlayer.elementAt(i);
+            if (item != null && isReviveItem(item)) return item;
+        }
+        return null;
+    }
+    public static boolean isReviveItem(Item item) {
+        if (item == null || item.itemName == null) return false;
+        String name = TradeStock.normalize(item.itemName);
+        return name.indexOf("thanh gia") >= 0
+                || name.indexOf("bua hoi sinh") >= 0
+                || name.indexOf("thuoc hoi sinh") >= 0
+                || name.indexOf("ngoc hoi sinh") >= 0
+                || name.indexOf("binh hoi sinh") >= 0
+                || name.equals("hoi sinh")
+                || name.indexOf("vat pham hoi sinh") >= 0;
+    }
     public void resurrect() {
-        if (GameScreen.player!=null && GameScreen.player.hp<=0) GlobalService.gI().gohome((byte)1);
+        if (GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4)) {
+            GlobalService.gI().gohome((byte)1);
+        }
     }
     public void resurrectVillage() {
-        if (GameScreen.player!=null && GameScreen.player.hp<=0) GlobalService.gI().gohome((byte)0);
+        if (GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4)) {
+            GlobalService.gI().gohome((byte)0);
+            if (GameCanvas.currentDialog!=null) GameCanvas.end_Dialog();
+            if (GameCanvas.menu2!=null) GameCanvas.menu2.isShowMenu=false;
+        }
     }
     public void resetLostTrip() {
         clearIntent(); hadBeast=false; absentAt=0; view.cargo=0; view.full=false; view.animalMissing=false; leashSecured=false;
+        lastBeastMap=""; lastBeastX=-1; lastBeastY=-1; recoveryMap="";
+        TradeRecovery.clear();
     }
     public void disconnected() {
         if (!active()) return;
@@ -215,10 +296,11 @@ public final class LiveTrade implements TradeEngine.Port {
         e.choices=options; enqueue(e);
     }
     public synchronized void dialog(Object source,String text,mVector choices) {
+        activeDialog=source; activeDialogText=text; activeDialogChoices=choices;
         hiddenDialog=null;
         if (active() && (TradeSignals.startTradeConfirmation(text)
                 || (intent==BUY || engine.state==TradeEngine.BUY || engine.state==TradeEngine.WAIT_BUY)
-                    && (TradeSignals.gem(text,argument) || TradeSignals.bought(text) || TradeSignals.full(text) || TradeSignals.depleted(text)))) {
+                    && (TradeSignals.gem(text,argument) || TradeSignals.bought(text) || TradeSignals.full(text) || TradeSignals.depleted(text) || TradeSignals.tooFast(text)))) {
             hiddenDialog=source;
         }
         Event e=new Event(); e.type=3; e.dialog=source; e.text=text; e.choices=choices; e.map=GameCanvas.loadmap.idMap; e.sequence=++dialogSequence; enqueue(e);
@@ -228,7 +310,7 @@ public final class LiveTrade implements TradeEngine.Port {
         if (!animalCargo(title,items.size())) return false;
         // Hide only background cargo checks. A selected animal belongs to the
         // user's interaction and its inventory must remain visible.
-        hiddenShop=beast.ID==cargoRequestAnimal && GameCanvas.loadmap.idMap==cargoRequestMap;
+        hiddenShop=beast!=null && beast.ID==cargoRequestAnimal && GameCanvas.loadmap.idMap==cargoRequestMap;
         return true;
     }
     public synchronized void shop(mVector items,int id,int type) {
@@ -264,15 +346,33 @@ public final class LiveTrade implements TradeEngine.Port {
             lastMap=GameCanvas.loadmap.idMap; buyer=null; seller=null; menu=null; shop=null; cachedShop=null; scanIndex=0; queriedNpc=-10000; leashSecured=false;
         }
         view.gemDrops=false;
-        for (int i=0;i<GameScreen.Vecplayers.size();i++) {
-            MainObject drop=(MainObject)GameScreen.Vecplayers.elementAt(i);
-            if (drop!=null && !drop.isRemove && (drop.typeObject==3 || drop.typeObject==4 || drop.typeObject==5 || drop.typeObject==7)
-                    && (TradeSignals.gem(drop.name,0) || TradeSignals.gem(drop.name,1) || TradeSignals.gem(drop.name,2))) view.gemDrops=true;
+        boolean beastHasCargo=beast!=null && (view.cargo>0 || view.full) && engine.state!=TradeEngine.WAIT_NEW;
+        if (!beastHasCargo) {
+            for (int i=0;i<GameScreen.Vecplayers.size();i++) {
+                MainObject drop=(MainObject)GameScreen.Vecplayers.elementAt(i);
+                if (drop!=null && !drop.isRemove && (drop.typeObject==3 || drop.typeObject==4 || drop.typeObject==5 || drop.typeObject==7)
+                        && (TradeSignals.gem(drop.name,0) || TradeSignals.gem(drop.name,1) || TradeSignals.gem(drop.name,2))) view.gemDrops=true;
+            }
         }
-        view.dead=GameScreen.player.hp<=0; view.animal=beast!=null;
+        view.dead=GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4);
+        view.hasReviveItem=hasReviveItem();
+        view.animal=beast!=null;
+        if (view.dead) {
+            navigation.teleported=true;
+            navigation.resetJourney();
+        }
         if (beast!=null) {
             hadBeast=true; absentAt=0; view.hp=beast.hp; view.maxHp=beast.maxHp;
             view.distance=MainObject.getDistance(GameScreen.player.x,GameScreen.player.y,beast.x,beast.y);
+            if (GameCanvas.loadmap!=null) {
+                lastBeastMap=GameCanvas.loadmap.nameMap;
+                lastBeastX=beast.x;
+                lastBeastY=beast.y;
+                if (engine.state==TradeEngine.TO_SELL || engine.state==TradeEngine.RECOVER || view.cargo>0) {
+                    TradeRecovery.save(GameScreen.player!=null ? GameScreen.player.ID : -1,
+                        lastBeastMap,lastBeastX,lastBeastY,view.cargo,config.market,config.gem,config.animal,now);
+                }
+            }
             if (summoned && beast.ID!=oldBeast && engine.state==TradeEngine.SUMMON) {
                 view.cargo=0; view.full=false; view.cargoRevision++; summoned=false; intent=0;
             }
@@ -282,7 +382,12 @@ public final class LiveTrade implements TradeEngine.Port {
             oldBeast=beast.ID;
         } else {
             view.distance=0;
-            if (hadBeast && absentAt==0) { absentAt=now; recoveryMap=navigation.previousMap; }
+            if (hadBeast && absentAt==0) {
+                absentAt=now;
+                recoveryMap=(lastBeastMap!=null && lastBeastMap.length()>0) ? lastBeastMap : navigation.previousMap;
+                TradeRecovery.save(GameScreen.player!=null ? GameScreen.player.ID : -1,
+                    recoveryMap,lastBeastX,lastBeastY,view.cargo,config.market,config.gem,config.animal,now);
+            }
             if (!hadBeast && !reconnecting) view.cargo=0;
         }
         view.animalMissing=hadBeast && beast==null && !recalled && !saleSent && absentAt>0 && now-absentAt>=2000;
@@ -293,6 +398,7 @@ public final class LiveTrade implements TradeEngine.Port {
                 view.market=i; break;
             }
         }
+        view.inRecoveryMap=recoveryMap!=null && recoveryMap.length()>0 && GameCanvas.loadmap!=null && Navigator.same(GameCanvas.loadmap.nameMap,recoveryMap);
         if (resumeEscorting) {
             if (beast==null) {
                 Navigator.stop(); detail="Chờ tìm lại thú trước khi dắt tiếp";
@@ -315,19 +421,91 @@ public final class LiveTrade implements TradeEngine.Port {
             }
         }
         seller=findNamed("graham");
-        view.atSeller=Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP) && seller!=null && distance(seller)<=64 && beast!=null && view.distance<=40 && (view.cargo>0 || view.full);
+        view.atSeller=Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP) && seller!=null && distance(seller)<=64 && beast!=null && view.distance<=40 && MainObject.getDistance(beast.x,beast.y,seller.x,seller.y)<=64 && (view.cargo>0 || view.full);
+        if (view.atSeller && engine.state==TradeEngine.TO_SELL) {
+            Navigator.stop();
+        }
         Event event; while ((event=poll())!=null) process(event,now);
         if (saleSent && (saleAcknowledged || beast==null) && !view.dead && seller!=null && distance(seller)<=64 && view.connected && Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP) && (saleAcknowledged || now-absentAt>=2000)) {
-            if (engine.state==TradeEngine.WAIT_SALE) earnings.complete(saleAmount);
+            if (engine.state==TradeEngine.WAIT_SALE) {
+                if (saleAmount<0 && goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale) {
+                    saleAmount=GameScreen.player.gold-goldBeforeSale;
+                }
+                earnings.complete(saleAmount);
+            }
             engine.onSaleConfirmed(true,now); clearIntent(); hadBeast=false; view.cargo=0; view.full=false; view.animalMissing=false;
+            lastBeastMap=""; lastBeastX=-1; lastBeastY=-1; recoveryMap="";
+            TradeRecovery.clear();
         }
-        if (recalled && beast==null) { intent=0; hadBeast=false; view.animalMissing=false; }
+        if (recalled && beast==null && engine.state!=TradeEngine.WAIT_REPLACE && engine.state!=TradeEngine.WAIT_NEW) {
+            intent=0; hadBeast=false; view.animalMissing=false; TradeRecovery.clear();
+        }
         if (reconnecting && view.cargo>=0) { reconnecting=false; intent=0; }
         engine.tick(view,now);
         if (engine.state==TradeEngine.TO_SELL && (intent==BUY || intent==QUERY || intent==SUMMON)) clearIntent();
+        if (isBuying() && GameScreen.ObjFocus!=beast) {
+            if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu && isBeastMenu(GameCanvas.menu2.menuItems)) GameCanvas.menu2.isShowMenu=false;
+        }
+        if (GameCanvas.currentDialog==null) {
+            activeDialog=null; activeDialogText=null; activeDialogChoices=null;
+        } else if (!view.dead && activeDialog==GameCanvas.currentDialog && activeDialogChoices!=null) {
+            checkAndConfirmSaleDialog(activeDialog, activeDialogText, activeDialogChoices, now);
+        }
+        if (!view.dead) {
+            if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu && isReviveMenu(GameCanvas.menu2.menuItems)) {
+                GameCanvas.menu2.isShowMenu=false;
+            }
+        } else if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu && GameCanvas.menu2.menuItems!=null) {
+            mVector items=GameCanvas.menu2.menuItems;
+            for (int i=0;i<items.size();i++) {
+                Object obj=items.elementAt(i);
+                if (obj instanceof iCommand) {
+                    iCommand cmd=(iCommand)obj;
+                    String cap=TradeStock.normalize(cmd.caption!=null ? cmd.caption : "");
+                    if (cap.indexOf("vat pham hoi sinh")>=0 || cap.indexOf("thanh gia")>=0 || (cap.indexOf("hoi sinh")>=0 && cap.indexOf("ngoc")<0)) {
+                        GameCanvas.menu2.menuSelectedItem=i;
+                        try { GameCanvas.menu2.commandPointer(2,0); } catch (Throwable ignored) {}
+                        GameCanvas.menu2.isShowMenu=false;
+                        if (GameCanvas.currentDialog!=null) GameCanvas.end_Dialog();
+                        break;
+                    }
+                }
+            }
+        }
         if (!active()) { clearIntent(); return; }
         if (engine.state==TradeEngine.PAUSED || view.dead) return;
+        beastHasCargo=beast!=null && (view.cargo>0 || view.full) && engine.state!=TradeEngine.WAIT_NEW;
+        if (beastHasCargo) view.gemDrops=false;
+        if (view.animal && !beastHasCargo && (view.gemDrops || engine.state==TradeEngine.WAIT_NEW)) {
+            MainObject nearestGem=findNearestGem();
+            if (nearestGem!=null) {
+                Player.autoItem=new AutoGetItem((byte)0,(byte)0,(byte)0);
+                int d=MainObject.getDistance(GameScreen.player.x,GameScreen.player.y,nearestGem.x,nearestGem.y);
+                if (d<=48 && now>=nextPickup) {
+                    nextPickup=now+250;
+                    GlobalService.gI().Get_Item_Map((short)nearestGem.ID,(byte)nearestGem.typeObject);
+                }
+                if (d>20) navigation.walk(nearestGem.x,nearestGem.y,1,null,now);
+                detail="Nhặt "+nearestGem.name;
+                return;
+            } else if (view.gemDrops) {
+                view.gemDrops=false;
+            }
+        }
         pump(now);
+    }
+    private MainObject findNearestGem() {
+        if (GameScreen.Vecplayers==null || GameScreen.player==null) return null;
+        MainObject nearest=null; int best=Integer.MAX_VALUE;
+        for (int i=0;i<GameScreen.Vecplayers.size();i++) {
+            MainObject drop=(MainObject)GameScreen.Vecplayers.elementAt(i);
+            if (drop!=null && !drop.isRemove && (drop.typeObject==3 || drop.typeObject==4 || drop.typeObject==5 || drop.typeObject==7)
+                    && (TradeSignals.gem(drop.name,0) || TradeSignals.gem(drop.name,1) || TradeSignals.gem(drop.name,2))) {
+                int d=MainObject.getDistance(GameScreen.player.x,GameScreen.player.y,drop.x,drop.y);
+                if (d<best) { best=d; nearest=drop; }
+            }
+        }
+        return nearest;
     }
     private MainObject findNamed(String name) {
         for (int i=0;i<GameScreen.Vecplayers.size();i++) {
@@ -359,8 +537,10 @@ public final class LiveTrade implements TradeEngine.Port {
             if (beast!=null && beast.ID==e.id) {
                 view.cargo=e.menu; view.cargoRevision++;
                 // Only authoritative inventory counts, never local purchase estimates.
-                for (int i=0;i<TradeConfig.ANIMALS.length;i++) if (TradeSignals.animal(beast.name,i))
-                    view.full=e.menu>=TradeConfig.MAX_CARGO[i];
+                for (int i=0;i<TradeConfig.ANIMALS.length;i++) {
+                    if (TradeSignals.animal(beast.name,i) || config.animal==i)
+                        view.full=e.menu>=TradeConfig.MAX_CARGO[i];
+                }
                 if (e.menu==0) view.full=false;
                 cargoRequestAnimal=-1;
             }
@@ -395,6 +575,9 @@ public final class LiveTrade implements TradeEngine.Port {
                 && (sentAt>0 && now-sentAt<=15000 || isBuying() && lastPurchase>0 && now-lastPurchase<=15000);
         TradeStock reportedStock=TradeStock.parse(e.text);
         if (tradeResponse && isBuying()) {
+            if (TradeSignals.tooFast(e.text)) {
+                purchaseSent=false; dismiss(e); return;
+            }
             if (TradeSignals.full(e.text)) {
                 view.full=true; intent=0; purchaseSent=false; menu=null; shop=null; dismiss(e); return;
             }
@@ -419,8 +602,8 @@ public final class LiveTrade implements TradeEngine.Port {
                 if (purchaseSent) { purchaseSent=false; intent=0; dismiss(e); }
             }
         }
-        if (tradeResponse && purchaseSent && TradeSignals.bought(s)) {
-            view.cargo=Math.max(0,view.cargo)+1; view.cargoRevision++; purchaseSent=false; intent=0; dismiss(e);
+        if (tradeResponse && (purchaseSent || isBuying()) && TradeSignals.bought(s)) {
+            view.cargo=Math.max(0,view.cargo)+1; view.cargoRevision++; for (int i=0;i<TradeConfig.ANIMALS.length;i++) if (beast!=null && TradeSignals.animal(beast.name,i)) view.full=view.cargo>=TradeConfig.MAX_CARGO[i]; if (view.full) { purchaseSent=false; intent=0; menu=null; shop=null; } dismiss(e);
         }
         if (tradeResponse && saleSent && TradeSignals.sold(s)) {
             long amount=TradeEarnings.amount(e.text);
@@ -428,6 +611,25 @@ public final class LiveTrade implements TradeEngine.Port {
             saleAcknowledged=true; dismiss(e);
         }
         if (e.type==2) {
+            if (view.dead && e.choices!=null) {
+                for (int i=0;i<e.choices.size();i++) {
+                    Object obj=e.choices.elementAt(i);
+                    if (obj instanceof iCommand) {
+                        iCommand cmd=(iCommand)obj;
+                        String cap=TradeStock.normalize(cmd.caption!=null ? cmd.caption : "");
+                        if (cap.indexOf("vat pham hoi sinh")>=0 || cap.indexOf("thanh gia")>=0 || (cap.indexOf("hoi sinh")>=0 && cap.indexOf("ngoc")<0)) {
+                            GlobalService.gI().Dynamic_Menu((short)e.id,(byte)e.menu,(byte)i);
+                            if (GameCanvas.menu2!=null) {
+                                GameCanvas.menu2.menuSelectedItem=i;
+                                GameCanvas.menu2.isShowMenu=false;
+                            }
+                            if (GameCanvas.currentDialog!=null) GameCanvas.end_Dialog();
+                            return;
+                        }
+                    }
+                }
+            }
+            if (e.id==-56 && isBuying() && GameScreen.ObjFocus!=beast) { if (GameCanvas.menu2!=null) GameCanvas.menu2.isShowMenu=false; return; }
             if (e.id==-56 && cargoRequestAnimal>=0 && e.map==cargoRequestMap && e.choices!=null) {
                 for (int i=0;i<e.choices.size();i++) {
                     String label=TradeStock.normalize(((iCommand)e.choices.elementAt(i)).caption);
@@ -451,13 +653,29 @@ public final class LiveTrade implements TradeEngine.Port {
                 }
             }
         }
+        if (view.dead && e.type==3 && e.dialog==GameCanvas.currentDialog && e.choices!=null) {
+            String text=TradeStock.normalize(e.text!=null ? e.text : "");
+            if (text.indexOf("hoi sinh")>=0 || text.indexOf("thanh gia")>=0 || text.indexOf("revive")>=0) {
+                for (int i=0;i<e.choices.size();i++) {
+                    iCommand c=(iCommand)e.choices.elementAt(i);
+                    if (c!=null && TradeSignals.isConfirmButton(c.caption)) {
+                        c.perform();
+                        if (e.dialog==GameCanvas.currentDialog) GameCanvas.end_Dialog();
+                        break;
+                    }
+                }
+            }
+        }
+        if (e.type==3 && e.dialog==GameCanvas.currentDialog && e.choices!=null) {
+            if (checkAndConfirmSaleDialog(e.dialog, e.text, e.choices, now)) return;
+        }
         if (tradeResponse && e.type==3 && e.dialog==GameCanvas.currentDialog && e.choices!=null
                 && !view.dead && engine.state!=TradeEngine.PAUSED && !TradeConfig.tradingClosed(now)) {
             boolean confirm=intent==SELL && saleSent && TradeSignals.sell(s)
                     || intent==RECALL && recalled && (TradeSignals.recall(s) || TradeSignals.animalUseConfirmation(s)
                         || TradeSignals.replaceAnimalConfirmation(e.text))
-                    || intent==SUMMON && summoned && (TradeSignals.animal(s,config.animal) || TradeSignals.animalUseConfirmation(s)
-                        || TradeSignals.replaceAnimalConfirmation(e.text))
+                    || intent==SUMMON && summoned && (TradeSignals.animal(s,config.animal) || TradeSignals.animal(s,0) || TradeSignals.animal(s,1) || TradeSignals.animal(s,2)
+                        || TradeSignals.animalUseConfirmation(s) || (engine.state!=TradeEngine.WAIT_NEW && beast==null && TradeSignals.replaceAnimalConfirmation(e.text)))
                     || intent==BUY && (purchaseSent || itemPurchaseSent) && (TradeSignals.gem(s,argument) || s.indexOf("mua")>=0 || s.indexOf("da quy")>=0 || s.indexOf("hang")>=0)
                     || TradeSignals.startTradeConfirmation(e.text)
                         && (intent==SUMMON && summoned || intent==BUY && buyer!=null);
@@ -509,12 +727,39 @@ public final class LiveTrade implements TradeEngine.Port {
         }
         return false;
     }
+    private boolean checkAndConfirmSaleDialog(Object dialog, String text, mVector choices, long now) {
+        if (dialog==null || choices==null || view.dead || engine.state==TradeEngine.PAUSED || TradeConfig.tradingClosed(now)) return false;
+        String s=TradeStock.normalize(text!=null ? text : "");
+        boolean inSellerContext=intent==SELL || engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL
+                || Navigator.same(GameCanvas.loadmap.nameMap, TradeConfig.SELLER_MAP);
+        boolean isSalePrompt=TradeSignals.sell(s) || s.indexOf("ban tat ca")>=0 || s.indexOf("ban toan bo")>=0
+                || s.indexOf("muon ban")>=0 || (s.indexOf("ban")>=0 && (s.indexOf("vang")>=0 || s.indexOf("gia")>=0));
+        if (inSellerContext && isSalePrompt) {
+            long amount=TradeEarnings.amount(text);
+            if (amount>0) saleAmount=amount;
+            for (int i=0;i<choices.size();i++) {
+                iCommand c=(iCommand)choices.elementAt(i);
+                if (c!=null && (TradeSignals.isConfirmButton(c.caption) || i==0)) {
+                    saleSent=true;
+                    saleConfirmedAt=now;
+                    sentAt=now;
+                    engine.onActionProgress(now);
+                    c.perform();
+                    detail="Đã xác nhận bán "+(saleAmount>0 ? (saleAmount+" vàng") : "hàng");
+                    if (dialog==GameCanvas.currentDialog) GameCanvas.end_Dialog();
+                    activeDialog=null; activeDialogText=null; activeDialogChoices=null;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     private void dismiss(Event e) {
         if (e.dialog!=null && e.dialog==GameCanvas.currentDialog) GameCanvas.end_Dialog();
     }
     private void pump(long now) {
         if (intent==0 || now<nextAction) return;
-        if ((intent==QUERY || intent==SUMMON && engine.state!=TradeEngine.WAIT_NEW || intent==BUY) && view.market!=engine.market) {
+        if ((intent==QUERY || intent==SUMMON && engine.state!=TradeEngine.WAIT_NEW && engine.state!=TradeEngine.WAIT_REPLACE || intent==BUY) && view.market!=engine.market) {
             clearIntent(); return;
         }
         if (intent==SELL && !Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP)) {
@@ -534,30 +779,59 @@ public final class LiveTrade implements TradeEngine.Port {
             GlobalService.gI().chat_npc((byte)npc.getIDnpc()); return;
         }
         if (intent==RECALL && (engine.state==TradeEngine.WAIT_REPLACE || engine.state==TradeEngine.WAIT_RECALL) && !recalled) {
+            Item foundItem=null;
             for (int i=0;i<Item.VecInvetoryPlayer.size();i++) {
                 Item item=(Item)Item.VecInvetoryPlayer.elementAt(i);
-                if (item!=null && item.ItemCatagory==4 && item.numPotion>0 && TradeSignals.animal(item.itemName,argument)) {
-                    recalled=true; sentAt=now; GlobalService.gI().Use_Potion((short)item.Id); return;
+                if (item!=null && TradeSignals.animal(item.itemName,argument)) { foundItem=item; break; }
+            }
+            if (foundItem==null) {
+                for (int i=0;i<Item.VecInvetoryPlayer.size();i++) {
+                    Item item=(Item)Item.VecInvetoryPlayer.elementAt(i);
+                    if (item!=null && (TradeSignals.animal(item.itemName,0) || TradeSignals.animal(item.itemName,1) || TradeSignals.animal(item.itemName,2))) {
+                        foundItem=item; break;
+                    }
                 }
             }
-            detail="Cần vật phẩm "+TradeConfig.ANIMALS[argument]+" để thay thú"; return;
+            if (foundItem!=null) {
+                recalled=true; sentAt=now; GlobalService.gI().Use_Potion((short)foundItem.Id); return;
+            }
+            detail="C\u1ea7n v\u1eadt ph\u1ea9m th\u00fa bu\u00f4n \u0111\u1ec3 h\u1ee7y th\u00fa"; return;
         }
-        if (intent==SUMMON && !summoned) {
-            for (int i=0;i<Item.VecInvetoryPlayer.size();i++) {
-                Item item=(Item)Item.VecInvetoryPlayer.elementAt(i);
-                if (item!=null && item.ItemCatagory==4 && item.numPotion>0 && TradeSignals.animal(item.itemName,argument)) {
-                    summoned=true; sentAt=now; GlobalService.gI().Use_Potion((short)item.Id); return;
+        if (intent==SUMMON) {
+            if (summoned && !view.animal && now-sentAt>=3000) summoned=false;
+            if (!summoned) {
+                Item foundItem=null;
+                for (int i=0;i<Item.VecInvetoryPlayer.size();i++) {
+                    Item item=(Item)Item.VecInvetoryPlayer.elementAt(i);
+                    if (item!=null && TradeSignals.animal(item.itemName,argument)) { foundItem=item; break; }
                 }
+                if (foundItem==null) {
+                    for (int i=0;i<Item.VecInvetoryPlayer.size();i++) {
+                        Item item=(Item)Item.VecInvetoryPlayer.elementAt(i);
+                        if (item!=null && (TradeSignals.animal(item.itemName,0) || TradeSignals.animal(item.itemName,1) || TradeSignals.animal(item.itemName,2))) {
+                            foundItem=item; break;
+                        }
+                    }
+                }
+                if (foundItem!=null) {
+                    if (GameScreen.player!=null && GameScreen.player.typeMount!=-1) {
+                        GlobalService.gI().useMount((byte)-1);
+                    }
+                    summoned=true; sentAt=now; GlobalService.gI().Use_Potion((short)foundItem.Id); return;
+                }
+                detail="C\u1ea7n v\u1eadt ph\u1ea9m th\u00fa bu\u00f4n trong t\u00fai \u0111\u1ed3";
             }
         }
-        if (intent==BUY && purchaseSent) {
-            if (now-sentAt>=5000) {
-                info(now);
-                sentAt=now;
-            }
+        if (intent==BUY && purchaseSent && shop==null) {
+            if (now-sentAt>=15000) { purchaseSent=false; sentAt=now; }
             return;
         }
-        if (intent==SELL && saleSent && menu==null || intent==RECALL && recalled || intent==SUMMON && summoned) return;
+        if (intent==SELL && saleSent && menu==null) {
+            if (GameCanvas.currentDialog!=null) return;
+            if (now-sentAt>=2500) { saleSent=false; sentAt=0; }
+            else return;
+        }
+        if (intent==RECALL && recalled || intent==SUMMON && summoned) return;
         if (intent==BUY && shop!=null) {
             if (lastPurchase>0 && now-lastPurchase<TradeConfig.BUY_INTERVAL_MS) { nextAction=lastPurchase+TradeConfig.BUY_INTERVAL_MS; return; }
             for (int i=0;i<shop.size();i++) {
@@ -583,7 +857,7 @@ public final class LiveTrade implements TradeEngine.Port {
             if (chosen>=0) {
                 String label=TradeStock.normalize(((iCommand)menu.elementAt(chosen)).caption);
                 if (intent==BUY && TradeSignals.gem(label,argument)) purchaseSent=true;
-                if (intent==SELL && TradeSignals.sell(label)) saleSent=true;
+                if (intent==SELL) saleSent=true;
                 if (intent==RECALL && TradeSignals.recall(label)) recalled=true;
                 if (intent==SUMMON && TradeSignals.animal(label,argument)) summoned=true;
                 sentAt=now; engine.onActionProgress(now);
@@ -600,6 +874,7 @@ public final class LiveTrade implements TradeEngine.Port {
         if (npc==null) { detail="Chưa có NPC cho thao tác hiện tại"; return; }
         if (distance(npc)>64) { navigation.walk(npc.x,npc.y,2,beast,now); return; }
         if (intent!=BUY) GameScreen.ObjFocus=npc;
+        else if (GameScreen.ObjFocus==null) GameScreen.ObjFocus=npc;
         sentAt=now; GlobalService.gI().getlist_from_npc((byte)npc.getIDnpc());
     }
 }

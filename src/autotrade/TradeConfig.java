@@ -17,7 +17,7 @@ public final class TradeConfig {
         "Cửa Biển", "Nghĩa Địa Cát", "Hố Tử Thần", "Sa Mạc", "Khu phía Tây",
         "Thành Phố Kho Báu", "Rừng Chết", "Hang Sói Quỷ", "Cánh Đồng Sói", SELLER_MAP
     };
-    public static final int BUY_INTERVAL_MS = 4000;
+    public static final int BUY_INTERVAL_MS = 1000;
     public static final int MAP_CONG_DIA_NGUC = 52;
     public static final int MAP_CUA_BIEN = 19;
     public static final int MAP_VACH_DA_CHEO_LEO = 39;
@@ -30,6 +30,7 @@ public final class TradeConfig {
     public boolean rotateMarkets=true;
     public boolean resumeTrade;
     public boolean silentBuy = true;
+    public boolean lowDetail = true;
     public int savedCharacter = -1;
     public int charSlot = -1;
     public int mountItem = -1;

@@ -43,7 +43,15 @@ public final class TradeSignals {
 
     public static boolean depleted(String text) {
         String s = TradeStock.normalize(text);
-        return contains(s, new String[]{"het hang", "het da quy", "khong con hang", "khong con da quy"}) && s.indexOf("chua het") < 0;
+        return contains(s, new String[]{"het hang", "het da quy", "khong con hang", "khong con da quy", "da het hang", "da het", "vat pham da het"}) && s.indexOf("chua het") < 0;
+    }
+
+    public static boolean tooFast(String text) {
+        if (text == null) return false;
+        String s = TradeStock.normalize(text);
+        return contains(s, new String[]{
+            "thao tac qua nhanh", "qua nhanh", "xin cho vai giay", "xin cho giay lat", "vui long cho vai giay"
+        });
     }
 
     public static int cargo(String text) {
@@ -120,10 +128,13 @@ public final class TradeSignals {
     }
 
     public static boolean sell(String s) {
-        return contains(s, new String[]{
+        if (s == null) return false;
+        String norm = TradeStock.normalize(s);
+        return contains(norm, new String[]{
             "ban hang", "ban da quy", "ban toan bo hang", "ban tat ca hang",
-            "giao hang", "tra hang", "ban hang hoa", "ban toan bo", "ban tat ca"
-        });
+            "giao hang", "tra hang", "ban hang hoa", "ban toan bo", "ban tat ca",
+            "muon ban", "ban voi gia"
+        }) || (norm.indexOf("ban") >= 0 && (norm.indexOf("vang") >= 0 || norm.indexOf("gia") >= 0));
     }
 
     public static boolean recall(String s) {

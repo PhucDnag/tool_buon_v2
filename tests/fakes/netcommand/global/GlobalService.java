@@ -8,6 +8,9 @@ public class GlobalService {
  public void Use_Potion(short id){potionCalls++;lastPotion=id;}
  public void buy_item(byte shop,short item,short qty){buyCalls++;lastShop=shop;lastItem=item;lastQuantity=qty;}
  public void getlist_from_npc(byte id){shopCalls++;lastNpc=id;}
- public void gohome(byte type){revives++;}
+ public int lastGohomeType=-1;
+ public void gohome(byte type){revives++; lastGohomeType=type;}
+ public int getItemMapCalls;
+ public void Get_Item_Map(short id, byte type){ getItemMapCalls++; }
  public void useMount(byte by){}
 }

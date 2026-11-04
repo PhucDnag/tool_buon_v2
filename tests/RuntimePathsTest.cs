@@ -1,11 +1,12 @@
 using System;
 using System.IO;
 using PhucHsoManager;
-public static class RuntimePathsTest
+public class RuntimePathsTest : MarshalByRefObject
 {
+    public void Run() { Main(); }
     static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     [STAThread]
-    public static void Main()
+    public static void Main(string[] args = null)
     {
         var account = new AccountItem();
         Check(account.Id != new AccountItem().Id, "New rows have independent profiles");
@@ -104,6 +105,19 @@ public static class RuntimePathsTest
                 grid.CurrentCell = grid.Rows[0].Cells[3];
                 Check(object.ReferenceEquals(selected.Invoke(form, null), rows[1]), "Selection switches to second account");
                 Check(label.Text.Contains("account-b") && !label.Text.Contains("PID:"), "Stopped account never displays previous account PID");
+                grid.CurrentCell = grid.Rows[0].Cells[8];
+                grid.BeginEdit(false);
+                ((System.Windows.Forms.IDataGridViewEditingCell)grid.CurrentCell).EditingCellFormattedValue = false;
+                grid.NotifyCurrentCellDirty(true);
+                Check(!rows[1].AutoTradeOn, "Auto checkbox commits without leaving row");
+                string mailbox = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "auto-checkbox-test.cmd");
+                rows[1].Process = System.Diagnostics.Process.GetCurrentProcess(); rows[1].ControlFile = mailbox;
+                try {
+                    grid.BeginEdit(false);
+                    ((System.Windows.Forms.IDataGridViewEditingCell)grid.CurrentCell).EditingCellFormattedValue = true;
+                    grid.NotifyCurrentCellDirty(true);
+                    Check(rows[1].AutoTradeOn && File.ReadAllText(mailbox).StartsWith("1:"), "Checking auto on running row sends immediate start command");
+                } finally { rows[1].Process = null; rows[1].ControlFile = null; if (File.Exists(mailbox)) File.Delete(mailbox); }
                 using (var windowA = new System.Windows.Forms.Form())
                 using (var windowB = new System.Windows.Forms.Form()) {
                     windowA.Show(); windowB.Show();
@@ -111,8 +125,10 @@ public static class RuntimePathsTest
                     rows[0].WindowHandle = windowA.Handle; rows[1].WindowHandle = windowB.Handle;
                     var visibility = typeof(MainForm).GetMethod("SetAllVisible", flags);
                     visibility.Invoke(form, new object[] { false });
+                    System.Windows.Forms.Application.DoEvents();
                     Check(!windowA.Visible && !windowB.Visible && rows[0].Background && rows[1].Background, "Hide all keeps both processes alive in background mode");
                     visibility.Invoke(form, new object[] { true });
+                    System.Windows.Forms.Application.DoEvents();
                     Check(windowA.Visible && windowB.Visible && !rows[0].Background && !rows[1].Background, "Restore finds previously hidden windows");
                     rows[0].WindowHandle = rows[1].WindowHandle = IntPtr.Zero;
                     rows[1].Process = null;

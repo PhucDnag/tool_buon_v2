@@ -12,6 +12,7 @@ import java.io.*;
 public final class Navigator {
     public final MapGraph graph;
     public String status = "", previousMap = "";
+    public boolean teleported;
     private String current = "", destination;
     private String routeGoal, portalSnapshot;
     private int mapId = -1, cliffIndex = -1, cliffDirection;
@@ -56,11 +57,12 @@ public final class Navigator {
         if (changed) {
             resetStallWatch();
             stop();
+            if (routeGoal != null && previousMap.length() > 0 && !same(previousMap, current) && !teleported)
+                graph.block(previousMap, current);
+            teleported = false;
             previousMap = current;
             current = GameCanvas.loadmap.nameMap;
             mapId = GameCanvas.loadmap.idMap;
-            if (routeGoal != null && previousMap.length() > 0 && !same(previousMap, current))
-                graph.block(previousMap, current);
             cliffIndex = -1;
             destination = null;
             destX = -1;
@@ -230,7 +232,9 @@ public final class Navigator {
                 for (int k=0;k<8;k++) {
                     int d=(portalAttempt+k)%8, tx=x/tile+dx[d], ty=y/tile+dy[d];
                     if(tx<0 || ty<0 || tx>=w || ty>=h) continue;
-                    int cell=GameCanvas.loadmap.mapType[ty*w+tx];
+                    int idx = ty*w+tx;
+                    if(GameCanvas.loadmap.mapType==null || idx<0 || idx>=GameCanvas.loadmap.mapType.length) continue;
+                    int cell=GameCanvas.loadmap.mapType[idx];
                     if(cell==1 || cell==-1) continue;
                     int[] path=GridPath.find(GameCanvas.loadmap.mapType,w,h,p.x/tile,p.y/tile,tx,ty,0);
                     if(path==null || path.length==0) continue;
@@ -262,13 +266,17 @@ public final class Navigator {
         }
         int tile=LoadMap.wTile,w=GameCanvas.loadmap.mapW,h=GameCanvas.loadmap.mapH;
         int tx=beast.x/tile,ty=beast.y/tile;
+        int bIdx = ty*w+tx;
         boolean blocked=tx<0 || ty<0 || tx>=w || ty>=h || GameCanvas.loadmap.mapType==null
-                || GameCanvas.loadmap.mapType[ty*w+tx]==1 || GameCanvas.loadmap.mapType[ty*w+tx]==-1;
+                || bIdx<0 || bIdx>=GameCanvas.loadmap.mapType.length
+                || GameCanvas.loadmap.mapType[bIdx]==1 || GameCanvas.loadmap.mapType[bIdx]==-1;
         if (blocked || now-reunionAt>=3500) {
             for (int k=0;k<25;k++) {
                 int slot=(reunionAttempt+k)%25, nx=tx+slot%5-2,ny=ty+slot/5-2;
                 if(nx<0 || ny<0 || nx>=w || ny>=h || GameCanvas.loadmap.mapType==null) continue;
-                int cell=GameCanvas.loadmap.mapType[ny*w+nx], px=nx*tile+tile/2,py=ny*tile+tile/2;
+                int nIdx = ny*w+nx;
+                if (nIdx<0 || nIdx>=GameCanvas.loadmap.mapType.length) continue;
+                int cell=GameCanvas.loadmap.mapType[nIdx], px=nx*tile+tile/2,py=ny*tile+tile/2;
                 if(cell==1 || cell==-1 || MainObject.getDistance(px,py,beast.x,beast.y)>35) continue;
                 int[] path=GridPath.find(GameCanvas.loadmap.mapType,w,h,p.x/tile,p.y/tile,nx,ny,0);
                 if(path==null || path.length==0) continue;
@@ -327,7 +335,8 @@ public final class Navigator {
         if (tiles==null || tile<=0 || (long)w*h>tiles.length) return false;
         for (int k=0;k<25;k++) {
             int slot=(unstickAttempt+k)%25, tx=p.x/tile+slot%5-2,ty=p.y/tile+slot/5-2;
-            if (tx<0 || ty<0 || tx>=w || ty>=h || tiles[ty*w+tx]==1 || tiles[ty*w+tx]==-1) continue;
+            int uIdx = ty*w+tx;
+            if (tx<0 || ty<0 || tx>=w || ty>=h || uIdx<0 || uIdx>=tiles.length || tiles[uIdx]==1 || tiles[uIdx]==-1) continue;
             int px=p.x+(slot%5-2)*tile,py=p.y+(slot/5-2)*tile;
             if (MainObject.getDistance(p.x,p.y,px,py)<=16
                     || beast!=null && MainObject.getDistance(px,py,beast.x,beast.y)>35) continue;

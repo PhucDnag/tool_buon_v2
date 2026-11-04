@@ -23,6 +23,9 @@ public final class LaunchConfigTest {
             check(settings[i][1].equals(org.microemu.app.util.MIDletSystemProperties.getProperty(key)),"Emulator can read inherited launch properties");
         }
         TradeConfig c=new TradeConfig(); LaunchConfig.apply(c);
+        check(c.lowDetail,"Low-detail defaults on");
+        System.setProperty("phuc.lowdetail","0"); LaunchConfig.apply(c);
+        check(!c.lowDetail,"Manager can disable low-detail mode per account");
         check(c.charSlot==2 && c.market==1 && c.gem==2 && c.animal==1 && c.hpIndex==3,"Manager numeric configuration overrides defaults");
         check(c.resumeTrade && c.reconnect && c.autoMount && c.teleport && !c.rotateMarkets && !c.hud && !c.visual && !c.fakeName && !c.silentBuy,"Manager flags override RMS/defaults");
         // Simulate a different row overriding a profile that already has saved settings.

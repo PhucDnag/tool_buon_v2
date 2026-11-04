@@ -10,6 +10,8 @@ public final class TradeEarnings {
     public static long amount(String text) {
         String s=TradeStock.normalize(text);
         int end=s.indexOf(" vang");
+        if (end<0) end=s.indexOf(" xu");
+        if (end<0) end=s.indexOf(" coin");
         if (end<0) return -1;
         int start=end;
         while (start>0) {
