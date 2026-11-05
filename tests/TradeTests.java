@@ -238,6 +238,32 @@ public final class TradeTests {
             v.animal=true; v.hp=100; e.tick(v,8000);
             check(e.state==TradeEngine.TO_MARKET,"After replacement recheck market instead of waiting on obsolete buy request");
         }
+        // Unknown sale outcomes must not wait forever or start another trip.
+        p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
+        e.state=TradeEngine.SELL; v.atSeller=true; e.tick(v,1000);
+        e.tick(v,40000);
+        check(e.state==TradeEngine.STOP && p.sells==1,"Unknown sale outcome stops after synchronization grace period");
+        TradeConfig fastSale=new TradeConfig(); fastSale.saleTimeoutMs=4000; fastSale.maxSaleAttempts=2;
+        p=new Port(); v=new TradeEngine.View(); e=new TradeEngine(fastSale,p); e.start(0);
+        v.animal=true; v.cargo=2; v.atSeller=true; e.state=TradeEngine.SELL;
+        for (int n=0;n<30;n++) e.tick(v,n*1000L);
+        check(e.state==TradeEngine.STOP && p.sells==2,"Fast sale policy also bounds rejected sale attempts");
+        p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
+        v.animal=true; v.cargo=6; v.hp=1; v.maxHp=100; e.state=TradeEngine.TO_SELL;
+        e.tick(v,1000); v.animal=false; e.tick(v,2000);
+        v.animal=true; v.hp=100; v.cargo=-1; e.tick(v,7000);
+        check(e.state==TradeEngine.WAIT_NEW && v.cargo==-1,"Replacement cannot invent cargo from previous animal");
+        v.gemDrops=true; v.cargo=1; e.tick(v,8000);
+        check(e.state==TradeEngine.WAIT_NEW,"Partial pickup keeps collecting remaining drops");
+        e.onActionProgress(31000); e.tick(v,33000);
+        check(e.state==TradeEngine.STOP,"Uncollectable drops and repeated menus cannot extend replacement forever");
+        p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
+        e.state=TradeEngine.SELL; v.atSeller=true; v.animal=true; v.cargo=6; e.tick(v,1000);
+        v.dead=true; e.tick(v,2000); e.tick(v,14000);
+        v.dead=false; v.animal=false; v.animalMissing=true; v.atSeller=false; e.tick(v,15000);
+        check(e.state==TradeEngine.RECOVER && p.recoveries>0,"Death during sale resumes recovery after village revival");
+        v.animal=true; v.animalMissing=false; e.tick(v,16000);
+        check(e.state==TradeEngine.TO_SELL,"Reunited animal resumes interrupted sale trip");
         System.out.println("PASS "+checks+" assertions");
     }
 }

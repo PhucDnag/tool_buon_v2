@@ -35,6 +35,8 @@ public final class TradeConfig {
     public int charSlot = -1;
     public int mountItem = -1;
     public String mountName = "Chưa chọn";
+    public int maxSaleAttempts = 3;
+    public int saleTimeoutMs = 20000;
 
     public int reviveDelay(Random random) {
         int min = Math.max(0, Math.min(15000, reviveMinMs));

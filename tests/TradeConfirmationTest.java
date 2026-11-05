@@ -213,7 +213,9 @@ public final class TradeConfirmationTest {
         live.tick(replacement,5000); live.tick(replacement,9000);
         check(live.engine.state==TradeEngine.WAIT_NEW && Player.autoItem!=null,"Wait with auto-pickup enabled while gems remain on ground");
         drop.isRemove=true; live.tick(replacement,10000); live.tick(replacement,11200);
-        check(live.engine.state==TradeEngine.TO_SELL,"Resume escort after replacement and pickup without requiring cargo count");
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Wait for cargo confirmation after drops disappear");
+        live.animalCargo("Lừa vàng",1); live.tick(replacement,11500);
+        check(live.engine.state==TradeEngine.TO_SELL,"Resume escort after confirmed pickup");
         GameCanvas.loadmap.idMap=8; GameCanvas.loadmap.nameMap=TradeConfig.SELLER_MAP;
         MainObject graham=new MainObject(); graham.ID=77; graham.typeObject=2; graham.name="Graham";
         graham.x=200; graham.y=200; GameScreen.Vecplayers.addElement(graham);
@@ -593,8 +595,11 @@ public final class TradeConfirmationTest {
         GameScreen.Vecplayers.removeElement(gemDrop);
         live.tick(newBeast,73500);
         check(!live.view.gemDrops,"No more gem drops on map");
+        check(live.engine.state==TradeEngine.WAIT_NEW && live.view.cargo==-1,"Disappearing drops cannot fabricate recovered cargo");
+        live.animalCargo("Hành trang",6);
+        live.tick(newBeast,74000);
         check(live.engine.state==TradeEngine.TO_SELL,"WAIT_NEW transitions back to TO_SELL after gem pickup");
-        check(live.view.cargo==6,"Previous cargo count restored after gem pickup");
+        check(live.view.cargo==6,"Server confirms cargo after gem pickup");
 
                 // --- Regression test 4: Disconnect during recovery does not reset to TO_MARKET ---
         live=start();
@@ -740,6 +745,87 @@ public final class TradeConfirmationTest {
         check(live.earnings.gold==960000,"Trade earnings recorded 960,000 gold");
         check(live.engine.state==TradeEngine.TO_MARKET,"Completed sale successfully loops back to market");
 
+        // --- Regression test 11: Return to village when no spot-revive and run out to continue escorting beast ---
+        live=start();
+        live.engine.state=TradeEngine.TO_SELL;
+        GameCanvas.loadmap.idMap=42; GameCanvas.loadmap.nameMap="Đèo hoang sơ";
+        beast=new MainObject(); beast.ID=8526; beast.name="Bò vàng"; beast.hp=156000; beast.maxHp=400000;
+        beast.x=500; beast.y=300;
+        GameScreen.player.x=500; GameScreen.player.y=300;
+        live.view.cargo=24; live.view.full=true;
+        live.tick(beast,140000);
+        // Player dies without any revive items
+        Item.VecInvetoryPlayer.removeAllElements();
+        GameScreen.player.hp=0; GameScreen.player.Action=4;
+        live.tick(beast,140000);
+        // Exceed revive delay (9-11s), initial attempt
+        live.tick(beast,152000);
+        // Retry period expires, falls back to resurrectVillage
+        live.tick(beast,156500);
+        check(net.lastGohomeType==0,"Return to village when having no spot revive items");
+        // Player respawns alive in village
+        GameScreen.player.hp=100000; GameScreen.player.Action=0;
+        GameCanvas.loadmap.idMap=8; GameCanvas.loadmap.nameMap="Làng Sói Trắng";
+        live.tick(null,157000);
+        check(live.engine.state==TradeEngine.RECOVER,"State transitions to RECOVER to run out and find beast");
+        check(live.view.cargo==24,"Cargo 24 is preserved while returning to beast");
+        // Player navigates back and re-enters "Đèo hoang sơ"
+        GameCanvas.loadmap.idMap=42; GameCanvas.loadmap.nameMap="Đèo hoang sơ";
+        GameScreen.player.x=beast.x; GameScreen.player.y=beast.y;
+        live.tick(beast,158000);
+        check(live.engine.state==TradeEngine.TO_SELL,"Reunited with beast in old map, continues TO_SELL");
+
+        // --- Regression test 12: Sale retry and gold increase detection at Graham ---
+        live=start();
+        live.engine.state=TradeEngine.TO_SELL;
+        GameCanvas.loadmap.idMap=77; GameCanvas.loadmap.nameMap=TradeConfig.SELLER_MAP;
+        MainObject grahamNpc=new MainObject(); grahamNpc.ID=77; grahamNpc.typeObject=2; grahamNpc.name="Graham";
+        grahamNpc.x=200; grahamNpc.y=200;
+        GameScreen.Vecplayers.removeAllElements(); GameScreen.Vecplayers.addElement(grahamNpc);
+        beast=new MainObject(); beast.ID=8526; beast.name="Bò vàng"; beast.x=200; beast.y=200; beast.maxHp=400000; beast.hp=212000;
+        GameScreen.player.x=200; GameScreen.player.y=200; GameScreen.player.gold=50000;
+        live.view.cargo=24; live.view.full=true;
+        live.tick(beast,160000); live.tick(beast,161000);
+        check(live.engine.state==TradeEngine.WAIT_SALE,"Enter WAIT_SALE at Graham attempt 1");
+        // Graham sale dialog appears
+        Object dia1=new Object(); GameCanvas.currentDialog=dia1;
+        mVector btns1=options("Ok"); btns1.addElement(new iCommand("Hủy"));
+        iCommand ok1=(iCommand)btns1.elementAt(0);
+        live.dialog(dia1,"Bạn có muốn bán tất cả với giá 480000 Vàng ?",btns1);
+        live.tick(beast,162000);
+        check(ok1.calls==1,"Confirmed first sale dialog");
+        // Server ignores sale (beast still has 24 cargo, gold unchanged at 50000)
+        live.tick(beast,163000);
+        // Exceed fast sale timeout (4000ms), engine retries without hanging 20s
+        live.tick(beast,166000);
+        check(live.engine.state==TradeEngine.TO_SELL,"Unconfirmed sale timed out quickly and returned to TO_SELL");
+        // Next tick re-enters SELL and starts attempt 2
+        live.tick(beast,167500); live.tick(beast,167800);
+        check(live.engine.state==TradeEngine.WAIT_SALE,"Entered WAIT_SALE for attempt 2");
+        // Second attempt dialog
+        Object dia2=new Object(); GameCanvas.currentDialog=dia2;
+        mVector btns2=options("Ok"); btns2.addElement(new iCommand("Hủy"));
+        iCommand ok2=(iCommand)btns2.elementAt(0);
+        live.dialog(dia2,"Bạn có muốn bán tất cả với giá 480000 Vàng ?",btns2);
+        live.tick(beast,168000);
+        check(ok2.calls==1,"Confirmed second sale dialog");
+        // Server awards gold to player and consumes trade beast
+        GameScreen.player.gold=530000;
+        live.tick(null,169000);
+        check(live.engine.state==TradeEngine.TO_MARKET,"Gold increase confirms sale and loops back to market");
+        check(live.earnings.gold==480000,"Earnings recorded gold gained from sale");
+
+        live=start(); live.engine.state=TradeEngine.TO_SELL;
+        GameCanvas.loadmap.idMap=20; GameCanvas.loadmap.nameMap="Sa Mạc";
+        GameScreen.Vecplayers.removeAllElements();
+        beast=new MainObject(); beast.ID=9100; beast.name="Bò vàng";
+        beast.x=200; beast.y=200; beast.hp=100; beast.maxHp=100;
+        live.view.cargo=24; live.view.full=true;
+        int saves=Model.CRes.saveCalls;
+        for (int n=0;n<2000;n++) live.tick(beast,200000+n*5L);
+        check(Model.CRes.saveCalls-saves==2,"Two thousand update ticks persist recovery only twice over ten seconds: "+(Model.CRes.saveCalls-saves));
+        live.tick(null,210000);
+        check(Model.CRes.saveCalls-saves==3,"Losing animal immediately persists last known location");
         System.out.println("PASS trade confirmation and purchasing: "+checks+" assertions");
     }
 }

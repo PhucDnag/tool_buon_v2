@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using PhucHsoManager;
 public class RuntimePathsTest : MarshalByRefObject
@@ -8,6 +8,24 @@ public class RuntimePathsTest : MarshalByRefObject
     [STAThread]
     public static void Main(string[] args = null)
     {
+        var proxyAccount = new AccountItem { ProxyEnabled = true, ProxyHost = "127.0.0.1", ProxyPort = 1080, ProxyUsername = "fixture-user" };
+        proxyAccount.SetProxyPassword("proxy-fixture-secret");
+        var proxySerializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+        string proxyJson = proxySerializer.Serialize(proxyAccount);
+        Check(!proxyJson.Contains("proxy-fixture-secret"), "Proxy password is protected at rest");
+        proxyAccount = proxySerializer.Deserialize<AccountItem>(proxyJson);
+        Check(proxyAccount.ReadProxyPassword() == "proxy-fixture-secret", "Proxy settings survive reload");
+        using (var proxyDialog = new AccountEditDialog(proxyAccount, false)) {
+            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            var passwordBox = (System.Windows.Forms.TextBox)typeof(AccountEditDialog).GetField("txtProxyPassword", flags).GetValue(proxyDialog);
+            Check(passwordBox.Text == "" && passwordBox.UseSystemPasswordChar, "Saved proxy password never enters edit control");
+            typeof(AccountEditDialog).GetMethod("BtnOk_Click", flags).Invoke(proxyDialog, new object[] { null, EventArgs.Empty });
+            Check(proxyAccount.ReadProxyPassword() == "proxy-fixture-secret", "Blank proxy edit preserves secret");
+        }
+        proxyAccount.SetProxyPassword("replacement-proxy-fixture");
+        Check(proxyAccount.ReadProxyPassword() == "replacement-proxy-fixture", "Explicit proxy replacement works");
+        Check(!new AccountItem().ProxyEnabled, "New accounts default to direct mode");
+        Console.WriteLine("PASS per-account proxy settings and credential privacy");
         var account = new AccountItem();
         Check(account.Id != new AccountItem().Id, "New rows have independent profiles");
         var profiles = new[] { new AccountItem { Id = "acc2" }, new AccountItem { Id = "ACC2" },
@@ -21,6 +39,10 @@ public class RuntimePathsTest : MarshalByRefObject
         Check(profiles[1].Id == stableId, "Repaired profile persists across reloads");
         Console.WriteLine("PASS account profile identities: 4 assertions");
         TestRowSelection();
+        TestManagerLifecycle();
+        using (var dialog = new SettingsDialog(new AppSettings { LaunchDelaySeconds = int.MaxValue })) {
+            Check(dialog != null, "Out-of-range saved launch delay cannot crash settings dialog");
+        }
         var income = new AccountItem();
         Check(income.ReadTradeSnapshot("12000:1"), "New receipt added");
         Check(!income.ReadTradeSnapshot("12000:1") && income.TradeGold == 12000, "Repeated snapshot never doubles income");
@@ -81,6 +103,49 @@ public class RuntimePathsTest : MarshalByRefObject
             Check(RuntimePaths.FindJar(root, "", true) == "", "Never silently use unpatched client");
             Console.WriteLine("PASS runtime detection: 7 assertions");
         } finally { Directory.Delete(root, true); }
+    }
+
+    static void TestManagerLifecycle()
+    {
+        string file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "accounts.json");
+        byte[] backup = File.Exists(file) ? File.ReadAllBytes(file) : null;
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        try {
+            File.WriteAllText(file, "[]");
+            using (var form = new MainForm()) {
+                var rows = (System.Collections.Generic.List<AccountItem>)typeof(MainForm).GetField("accounts", flags).GetValue(form);
+                Check(rows.Count == 0, "Deleted final account stays deleted after reload");
+                var pending = (System.Collections.Generic.Queue<AccountItem>)typeof(MainForm).GetField("pendingLaunches", flags).GetValue(form);
+                var stopped = new AccountItem { UserStopped = true };
+                rows.Add(stopped); pending.Enqueue(stopped);
+                typeof(MainForm).GetMethod("LaunchNextPending", flags).Invoke(form, null);
+                Check(pending.Count == 0 && stopped.Process == null, "Stopped queued account is skipped without launch");
+                var waiting = new AccountItem { AutoRestart = true, NextRestartAt = DateTime.Now };
+                rows.Add(waiting); pending.Enqueue(waiting);
+                typeof(MainForm).GetMethod("StopAll", flags).Invoke(form, null);
+                Check(pending.Count == 0 && waiting.UserStopped && waiting.NextRestartAt == DateTime.MinValue,
+                    "Stop all cancels launch queue and crash restart countdown even for stopped games");
+            }
+            string damaged = "[{broken account data";
+            File.WriteAllText(file, damaged);
+            using (var form = new MainForm()) {
+                typeof(MainForm).GetMethod("SaveAccounts", flags).Invoke(form, null);
+                typeof(MainForm).GetMethod("AddAccount", flags).Invoke(form, null);
+                Check(File.ReadAllText(file) == damaged, "Malformed account file is never replaced with defaults or new accounts");
+            }
+            AtomicFile.Write(file, "original");
+            using (var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+                bool failed = false;
+                try { AtomicFile.Write(file, "replacement"); } catch (IOException) { failed = true; }
+                Check(failed && File.ReadAllText(file) == "original", "Failed atomic replacement preserves previous file");
+            }
+            AtomicFile.Write(file, "replacement");
+            Check(File.ReadAllText(file) == "replacement", "Atomic replacement succeeds once unlocked");
+            Check(Directory.GetFiles(Path.GetDirectoryName(file), "accounts.json.*.tmp").Length == 0, "Atomic writes clean up temporary files");
+            Console.WriteLine("PASS empty/corrupt storage, atomic saves, stopped queues and watchdog cancellation: 7 assertions");
+        } finally {
+            if (backup == null) File.Delete(file); else File.WriteAllBytes(file, backup);
+        }
     }
 
     static void TestRowSelection()

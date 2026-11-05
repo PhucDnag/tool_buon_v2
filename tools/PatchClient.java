@@ -171,6 +171,7 @@ public final class PatchClient implements Opcodes {
             Enumeration<JarEntry> entries=input.entries();
             while (entries.hasMoreElements()) {
                 JarEntry entry=entries.nextElement(); String name=entry.getName();
+                if (name.equals("CLib/mSocket.class")) continue;
                 if (name.endsWith(".SF") || name.endsWith(".RSA") || name.endsWith(".DSA")) continue;
                 byte[] bytes=read(input.getInputStream(entry));
                 if (name.endsWith(".class")) {

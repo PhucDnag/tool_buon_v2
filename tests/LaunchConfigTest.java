@@ -7,6 +7,7 @@ public final class LaunchConfigTest {
         String[][] settings={{"slot","2"},{"market","1"},{"gem","2"},{"animal","1"},{"hp","3"},
             {"autoon","1"},{"reconnect","1"},{"automount","1"},{"rotate","0"},{"teleport","1"},
             {"hud","0"},{"visual","0"},{"fakename","0"},{"silentbuy","0"},
+            {"proxy.enabled","1"},{"proxy.host","127.0.0.1"},{"proxy.port","1080"},{"proxy.user","fixture-user"},{"proxy.pass","fixture-proxy-secret"},
             {"server","Chiến Thần"},{"pass","fixture-đ-\"-\\-\n"}};
         StringBuffer wire=new StringBuffer();
         for (int i=0;i<settings.length;i++) {

@@ -248,3 +248,12 @@ Chỉ dùng `AccountManager.exe` và `dist/KnightOnline_PhucHso_v2.jar`; build l
 - **Tắt tất cả game**: dừng mọi game do manager hiện tại quản lý. **Xếp cửa sổ (F9)** hiện và xếp các game sát nhau trên màn hình chứa manager.
 - **Cài đặt → Thu gom RAM (phút)**: mặc định 10 phút, 0 để tắt, tối đa 120 phút. Áp dụng ngay cho các game đang mở bằng bản mới. Client yêu cầu Java thu gom đối tượng không còn dùng khi auto rảnh; không xóa dữ liệu game hoặc ép Windows đẩy RAM ra đĩa. Việc giảm RAM thực tế phụ thuộc JVM và tải game.
 - **Vàng bán hàng**: cộng số vàng được ghi trong phản hồi bán hàng thành công của auto, lưu theo acc qua các lần mở manager. Tổng là tiền bán hàng, chưa trừ vốn, chỉ bắt đầu ghi nhận từ bản này. Chuyến bán thiếu số tiền rõ ràng được đếm ở mục “Chuyến chưa rõ số vàng”; không ước tính từ biến động ví. Thống kê được gửi về manager mỗi giây; tắt cưỡng bức có thể mất cập nhật cuối cùng.
+
+
+### Proxy SOCKS5 theo tài khoản
+
+Trong **Sửa tài khoản → Proxy SOCKS5**, bật dùng proxy rồi nhập IP/host (không kèm port), port, username và password. Mỗi tài khoản có cấu hình độc lập; tài khoản mới mặc định không dùng proxy. Nhân bản tài khoản không tự sao chép proxy để tránh vô tình dùng chung IP.
+
+**Kiểm tra proxy** kiểm tra kết nối và xác thực SOCKS5, chưa xác nhận server game chấp nhận kết nối. Sau khi lưu và mở lại game, cột **Proxy SOCKS5** báo trạng thái kết nối thực tế; HUD hiển thị trạng thái và địa chỉ proxy. “Đã nối game qua SOCKS5” nghĩa là proxy đã chấp nhận đường hầm TCP tới server game, không phải xác nhận đăng nhập thành công hay xác minh IP đầu ra.
+
+Khi bật proxy, lỗi kết nối/xác thực sẽ không tự chuyển sang kết nối trực tiếp. Mật khẩu proxy được bảo vệ bằng Windows DPAPI, truyền sang client qua stdin và không xuất hiện trong tham số tiến trình. Ô mật khẩu luôn trống khi sửa; để trống giữ giá trị đã lưu, nhập mới để thay thế. Bỏ chọn dùng proxy để trở về kết nối trực tiếp ở lần mở game tiếp theo.

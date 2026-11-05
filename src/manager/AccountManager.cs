@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -12,6 +12,49 @@ using System.Windows.Forms;
 
 namespace PhucHsoManager
 {
+    public static class ProxyProbe
+    {
+        private static int ReadByte(Stream stream) {
+            int value = stream.ReadByte();
+            if (value < 0) throw new IOException("Proxy đóng kết nối.");
+            return value;
+        }
+        public static void Check(string host, int port, string username, string password) {
+            byte[] user = Encoding.UTF8.GetBytes(username ?? ""), pass = Encoding.UTF8.GetBytes(password ?? "");
+            if (user.Length > 255 || pass.Length > 255) throw new IOException("Thông tin xác thực quá dài.");
+            using (var client = new System.Net.Sockets.TcpClient()) {
+                IAsyncResult pending = client.BeginConnect(host, port, null, null);
+                using (WaitHandle wait = pending.AsyncWaitHandle) {
+                    if (!wait.WaitOne(8000)) throw new IOException("Hết thời gian chờ proxy.");
+                    client.EndConnect(pending);
+                }
+                client.ReceiveTimeout = client.SendTimeout = 8000;
+                using (Stream stream = client.GetStream()) {
+                    int method = user.Length == 0 ? 0 : 2;
+                    byte[] greeting = new byte[] { 5, 1, (byte)method };
+                    stream.Write(greeting, 0, greeting.Length);
+                    if (ReadByte(stream) != 5 || ReadByte(stream) != method) throw new IOException("Proxy từ chối phương thức SOCKS5.");
+                    if (method == 2) {
+                        stream.WriteByte(1); stream.WriteByte((byte)user.Length); stream.Write(user, 0, user.Length);
+                        stream.WriteByte((byte)pass.Length); stream.Write(pass, 0, pass.Length);
+                        if (ReadByte(stream) != 1 || ReadByte(stream) != 0) throw new IOException("Sai username/password proxy.");
+                    }
+                }
+            }
+        }
+    }
+    public static class AtomicFile
+    {
+        public static void Write(string path, string text)
+        {
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try {
+                File.WriteAllText(temp, text, Encoding.UTF8);
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+            } finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+    }
     public static class RuntimePaths
     {
         public static string Existing(string root, string path)
@@ -145,13 +188,9 @@ namespace PhucHsoManager
 
         public void Save()
         {
-            try
-            {
-                JavaScriptSerializer jss = new JavaScriptSerializer();
-                string json = jss.Serialize(this);
-                File.WriteAllText(SettingsFile, json, Encoding.UTF8);
-            }
-            catch { }
+            JavaScriptSerializer jss = new JavaScriptSerializer();
+            string json = jss.Serialize(this);
+            AtomicFile.Write(SettingsFile, json);
         }
     }
 
@@ -190,6 +229,23 @@ namespace PhucHsoManager
             try { return Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(
                 Convert.FromBase64String(PasswordProtected), null, System.Security.Cryptography.DataProtectionScope.CurrentUser)); }
             catch { throw new InvalidOperationException("Không giải mã được mật khẩu trên máy/tài khoản Windows này. Hãy nhập mật khẩu mới trong Sửa tài khoản."); }
+        }
+        public bool ProxyEnabled { get; set; }
+        public string ProxyHost { get; set; }
+        public int ProxyPort { get; set; }
+        public string ProxyUsername { get; set; }
+        public string ProxyPasswordProtected { get; set; }
+        [ScriptIgnore] public string ProxyStatus { get; set; }
+        public void SetProxyPassword(string value) {
+            if (!string.IsNullOrEmpty(value)) ProxyPasswordProtected = Convert.ToBase64String(
+                System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser));
+        }
+        public string ReadProxyPassword() {
+            if (string.IsNullOrEmpty(ProxyPasswordProtected)) return "";
+            try { return Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(
+                Convert.FromBase64String(ProxyPasswordProtected), null, System.Security.Cryptography.DataProtectionScope.CurrentUser)); }
+            catch { throw new InvalidOperationException("Không giải mã được mật khẩu proxy. Hãy nhập lại."); }
         }
         public string Server { get; set; }
         public int CharacterSlot { get; set; }
@@ -379,6 +435,10 @@ namespace PhucHsoManager
     public class AccountEditDialog : Form
     {
         private TextBox txtUsername, txtPassword;
+        private TextBox txtProxyHost, txtProxyUser, txtProxyPassword;
+        private NumericUpDown numProxyPort;
+        private CheckBox chkProxy;
+        private Label lblProxyTest;
         private ComboBox cmbServer, cmbSlot, cmbMarket, cmbGem, cmbAnimal, cmbHp;
         private CheckBox chkAutoTrade, chkAutoRecon, chkAutoMount, chkAutoRestart;
         private Button btnOk, btnCancel;
@@ -619,6 +679,37 @@ namespace PhucHsoManager
             numHealMp = new NumericUpDown { Left = 310, Top = supportY, Width = 100, Minimum = 1, Maximum = 100, Value = Math.Max(1, Math.Min(100, Account.HealMpPercent)) };
             tab4.Controls.Add(numHealMp); supportY += 42;
             tab4.Controls.Add(new Label { Text = "Bình HP/MP dùng theo ô phím tắt đang có của nhân vật. Auto buôn vẫn bật nhặt hàng để không bỏ sót đá.\n\nCấu hình chỉ áp dụng cho tài khoản đang sửa. Lưu và mở lại tab game để áp dụng.", Left = 20, Top = supportY, Width = 440, Height = 110, ForeColor = Color.DimGray });
+            TabPage proxyTab = new TabPage { Text = "Proxy SOCKS5", BackColor = Color.White, AutoScroll = true };
+            tabs.TabPages.Add(proxyTab);
+            chkProxy = new CheckBox { Text = "Dùng proxy riêng cho tài khoản này", Checked = Account.ProxyEnabled, Left = 20, Top = 18, Width = 440 };
+            txtProxyHost = new TextBox { Left = 145, Top = 56, Width = 300, Text = Account.ProxyHost ?? "" };
+            numProxyPort = new NumericUpDown { Left = 145, Top = 94, Width = 120, Minimum = 1, Maximum = 65535, Value = Math.Max(1, Math.Min(65535, Account.ProxyPort)) };
+            txtProxyUser = new TextBox { Left = 145, Top = 132, Width = 300, Text = Account.ProxyUsername ?? "" };
+            txtProxyPassword = new TextBox { Left = 145, Top = 170, Width = 300, UseSystemPasswordChar = true, Text = "" };
+            proxyTab.Controls.AddRange(new Control[] { chkProxy, txtProxyHost, numProxyPort, txtProxyUser, txtProxyPassword,
+                new Label { Text = "IP / Host:", Left = 20, Top = 59, Width = 120 },
+                new Label { Text = "Port:", Left = 20, Top = 97, Width = 120 },
+                new Label { Text = "Username:", Left = 20, Top = 135, Width = 120 },
+                new Label { Text = "Password:", Left = 20, Top = 173, Width = 120 },
+                new Label { Text = "Để trống mật khẩu: giữ giá trị đã lưu.\nĐể trống username nếu proxy không cần xác thực.", Left = 20, Top = 207, Width = 440, Height = 42 } });
+            Button testProxy = new Button { Text = "Kiểm tra proxy", Left = 20, Top = 255, Width = 140, Height = 30 };
+            lblProxyTest = new Label { Left = 20, Top = 292, Width = 440, Height = 65, Text = "Lưu rồi mở lại game để áp dụng. Proxy lỗi sẽ không chuyển sang IP mạng nhà." };
+            testProxy.Click += delegate {
+                string host = txtProxyHost.Text.Trim(), userName = txtProxyUser.Text.Trim(), secret;
+                int port = (int)numProxyPort.Value;
+                try { secret = txtProxyPassword.Text.Length > 0 ? txtProxyPassword.Text : Account.ReadProxyPassword(); }
+                catch (Exception ex) { lblProxyTest.Text = ex.Message; return; }
+                if (host.Length == 0) { lblProxyTest.Text = "Hãy nhập IP / Host proxy."; return; }
+                testProxy.Enabled = false; lblProxyTest.Text = "Đang kiểm tra kết nối và xác thực SOCKS5...";
+                ThreadPool.QueueUserWorkItem(delegate {
+                    string result;
+                    try { ProxyProbe.Check(host, port, userName, secret); result = "Xác thực SOCKS5 thành công. Kết nối tới server game sẽ được kiểm tra khi mở game."; }
+                    catch (Exception ex) { result = "Proxy thất bại: " + ex.Message; }
+                    try { if (!IsDisposed && IsHandleCreated) BeginInvoke((MethodInvoker)delegate { lblProxyTest.Text = result; testProxy.Enabled = true; }); }
+                    catch (InvalidOperationException) { }
+                });
+            };
+            proxyTab.Controls.Add(testProxy); proxyTab.Controls.Add(lblProxyTest);
             Controls.Add(tabs);
             Controls.Add(pnlBottom);
             AcceptButton = btnOk;
@@ -633,6 +724,15 @@ namespace PhucHsoManager
 
         private void BtnOk_Click(object sender, EventArgs e)
         {
+            if (chkProxy.Checked && (txtProxyHost.Text.Trim().Length == 0 || txtProxyHost.Text.IndexOf("://", StringComparison.Ordinal) >= 0)) {
+                MessageBox.Show("Nhập IP/host proxy, không kèm giao thức hoặc port."); return;
+            }
+            if (Encoding.UTF8.GetByteCount(txtProxyUser.Text.Trim()) > 255 || Encoding.UTF8.GetByteCount(txtProxyPassword.Text) > 255) {
+                MessageBox.Show("Username/password proxy tối đa 255 byte."); return;
+            }
+            Account.ProxyEnabled = chkProxy.Checked;
+            Account.ProxyHost = txtProxyHost.Text.Trim(); Account.ProxyPort = (int)numProxyPort.Value;
+            Account.ProxyUsername = txtProxyUser.Text.Trim(); Account.SetProxyPassword(txtProxyPassword.Text);
             string user = txtUsername.Text.Trim();
 
             int chosenSlot = (cmbSlot.SelectedIndex >= 0 && cmbSlot.SelectedIndex < 3) ? cmbSlot.SelectedIndex : -1;
@@ -720,7 +820,7 @@ namespace PhucHsoManager
 
             y += gap;
             Label l4 = new Label { Text = "Trễ mở hàng loạt (s):", Left = lx, Top = y + 3, Width = 135 };
-            numDelay = new NumericUpDown { Left = ix, Top = y, Width = 80, Minimum = 1, Maximum = 10, Value = Settings.LaunchDelaySeconds };
+            numDelay = new NumericUpDown { Left = ix, Top = y, Width = 80, Minimum = 1, Maximum = 10, Value = Math.Max(1, Math.Min(10, Settings.LaunchDelaySeconds)) };
             Controls.AddRange(new Control[] { l4, numDelay });
 
             y += gap;
@@ -762,7 +862,11 @@ namespace PhucHsoManager
                 Settings.RenameWindowTitle = chkRename.Checked;
                 Settings.MemoryCleanupMinutes = (int)numCleanup.Value;
                 Settings.DetectPaths();
-                Settings.Save();
+                try { Settings.Save(); }
+                catch (Exception ex) {
+                    MessageBox.Show("Không lưu được cài đặt: " + ex.Message, "Lỗi lưu", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
                 DialogResult = DialogResult.OK;
                 Close();
             };
@@ -812,6 +916,9 @@ namespace PhucHsoManager
         private ToolStripStatusLabel lblStatus, lblSummary;
         private System.Windows.Forms.Timer updateTimer;
         private bool isBatchLaunching = false;
+        private System.Windows.Forms.Timer launchTimer;
+        private readonly Queue<AccountItem> pendingLaunches = new Queue<AccountItem>();
+        private bool accountsLoadFailed;
         private bool allHidden;
         private ToolStripStatusLabel lblGold;
 
@@ -1082,6 +1189,7 @@ namespace PhucHsoManager
             dgvAccounts.Columns.AddRange(new DataGridViewColumn[] {
                 colSelect, colId, colDisplayName, colUser, colPass, colServer, colSlot, colTrade, colAutoTrade, colRestart, colStatus, colUptime, colNotes
             });
+            dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "ProxyStatus", HeaderText = "Proxy SOCKS5", DataPropertyName = "ProxyStatus", ReadOnly = true, Width = 230 });
             dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "TradeGold", HeaderText = "Vàng bán hàng", DataPropertyName = "TradeGold", ReadOnly = true, Width = 130,
                 DefaultCellStyle = new DataGridViewCellStyle { Format = "N0" } });
 
@@ -1229,6 +1337,15 @@ namespace PhucHsoManager
             foreach (var acc in accounts)
             {
                 statisticsChanged |= ReadStatistics(acc);
+                if (acc.IsRunning && !string.IsNullOrEmpty(acc.ControlFile)) {
+                    try {
+                        string proxyFile = acc.ControlFile + ".proxy";
+                        if (File.Exists(proxyFile)) {
+                            string state = File.ReadAllText(proxyFile, Encoding.UTF8);
+                            if (state.Length > 0 && state != acc.ProxyStatus) { acc.ProxyStatus = state; lblStatus.Text = acc.DisplayName + " — Proxy: " + state; dgvAccounts.Refresh(); }
+                        }
+                    } catch (IOException) { }
+                } else { acc.ProxyStatus = acc.ProxyEnabled ? "Đã bật — game chưa chạy" : "Tắt"; }
                 if (acc.IsRunning)
                 {
                     runningCount++;
@@ -1289,10 +1406,10 @@ namespace PhucHsoManager
             if (acc == null) return;
 
             // Password mask (col index 4)
-            if (e.ColumnIndex == 4 && e.Value != null)
+            if (e.ColumnIndex == 4)
             {
-                string pass = e.Value.ToString();
-                if (pass.Length > 0) e.Value = new string('•', Math.Min(8, pass.Length));
+                e.Value = string.IsNullOrEmpty(acc.PasswordProtected) ? "" : "••••••••";
+                e.FormattingApplied = true;
             }
 
             // Character slot (col index 6)
@@ -1323,7 +1440,7 @@ namespace PhucHsoManager
             }
 
             // Trade gold column (col index 13)
-            if (e.ColumnIndex == 13 || (e.ColumnIndex >= 0 && e.ColumnIndex < dgvAccounts.Columns.Count && dgvAccounts.Columns[e.ColumnIndex].Name == "TradeGold"))
+            if (e.ColumnIndex >= 0 && e.ColumnIndex < dgvAccounts.Columns.Count && dgvAccounts.Columns[e.ColumnIndex].Name == "TradeGold")
             {
                 e.Value = acc.TradeGold.ToString("N0");
                 e.FormattingApplied = true;
@@ -1408,29 +1525,29 @@ namespace PhucHsoManager
             }
 
             isBatchLaunching = true;
-            Thread t = new Thread(delegate ()
-            {
-                for (int i = 0; i < targets.Count; i++)
-                {
-                    AccountItem item = targets[i];
-                    Invoke(new MethodInvoker(delegate
-                    {
-                        lblStatus.Text = string.Format("Đang mở {0}/{1}: {2}...", i + 1, targets.Count, item.DisplayName);
-                        LaunchProcess(item);
-                    }));
-                    if (i < targets.Count - 1)
-                    {
-                        Thread.Sleep(settings.LaunchDelaySeconds * 1000);
-                    }
-                }
-                Invoke(new MethodInvoker(delegate
-                {
-                    lblStatus.Text = string.Format("Đã mở xong {0} tài khoản!", targets.Count);
-                    isBatchLaunching = false;
-                }));
-            });
-            t.IsBackground = true;
-            t.Start();
+            foreach (AccountItem target in targets) { target.UserStopped = false; pendingLaunches.Enqueue(target); }
+            launchTimer = new System.Windows.Forms.Timer();
+            launchTimer.Interval = Math.Max(1, Math.Min(300, settings.LaunchDelaySeconds)) * 1000;
+            launchTimer.Tick += delegate { LaunchNextPending(); };
+            launchTimer.Start();
+            LaunchNextPending();
+        }
+
+        private void LaunchNextPending()
+        {
+            if (launchTimer != null) launchTimer.Stop();
+            if (pendingLaunches.Count == 0) { CancelBatchLaunch(); return; }
+            AccountItem item = pendingLaunches.Dequeue();
+            if (accounts.Contains(item) && !item.UserStopped && !item.IsRunning) LaunchProcess(item);
+            if (pendingLaunches.Count == 0) CancelBatchLaunch();
+            else if (launchTimer != null) launchTimer.Start();
+        }
+
+        private void CancelBatchLaunch()
+        {
+            pendingLaunches.Clear();
+            if (launchTimer != null) { launchTimer.Stop(); launchTimer.Dispose(); launchTimer = null; }
+            isBatchLaunching = false;
         }
 
         private void EnsureProfileConfig(string profileDir, string gameJar)
@@ -1490,16 +1607,19 @@ namespace PhucHsoManager
 
             if (!File.Exists(java))
             {
+                acc.UserStopped = true;
                 MessageBox.Show("Chưa tìm thấy Java trên máy. Cài Java hoặc chép Java portable vào thư mục runtime\\bin\\java.exe bên cạnh tool, rồi mở lại.", "Lỗi Java", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
             if (!File.Exists(microJar))
             {
+                acc.UserStopped = true;
                 MessageBox.Show("Không tìm thấy trình giả lập:\n" + microJar, "Thiếu tệp", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
             if (!File.Exists(gameJar))
             {
+                acc.UserStopped = true;
                 MessageBox.Show("Không tìm thấy tệp game:\n" + gameJar, "Thiếu tệp", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
@@ -1515,11 +1635,10 @@ namespace PhucHsoManager
             // Ensure isolated profile directory exists
             string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             string profileDir = Path.Combine(userHome, ".microemulator", acc.Id);
-            if (!Directory.Exists(profileDir)) Directory.CreateDirectory(profileDir);
-            EnsureProfileConfig(profileDir, gameJar);
-
             try
             {
+                if (!Directory.Exists(profileDir)) Directory.CreateDirectory(profileDir);
+                EnsureProfileConfig(profileDir, gameJar);
                 List<string> vmArgs = new List<string>();
                 string controlDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "control");
                 Directory.CreateDirectory(controlDir);
@@ -1570,6 +1689,8 @@ namespace PhucHsoManager
                     vmArgs.Add(string.Format("-Dphuc.user=\"{0}\"", acc.Username));
 
                 string password = acc.ReadPassword();
+                string proxyPassword = acc.ProxyEnabled ? acc.ReadProxyPassword() : "";
+                acc.ProxyStatus = acc.ProxyEnabled ? "Chờ kết nối game qua proxy" : "Tắt";
                 string launcher = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools", "manager-launcher.jar");
                 if (!File.Exists(launcher)) throw new FileNotFoundException("Thiếu tools/manager-launcher.jar. Hãy build lại bộ tool.");
 
@@ -1591,9 +1712,18 @@ namespace PhucHsoManager
                         WriteLaunchProperty(p.StandardInput, option.Substring(2, eq - 2), option.Substring(eq + 1).Trim('"'));
                     }
                     WriteLaunchProperty(p.StandardInput, "phuc.pass", password);
+                    WriteLaunchProperty(p.StandardInput, "phuc.proxy.enabled", acc.ProxyEnabled ? "1" : "0");
+                    if (acc.ProxyEnabled) {
+                        WriteLaunchProperty(p.StandardInput, "phuc.proxy.host", acc.ProxyHost);
+                        WriteLaunchProperty(p.StandardInput, "phuc.proxy.port", acc.ProxyPort.ToString());
+                        WriteLaunchProperty(p.StandardInput, "phuc.proxy.user", acc.ProxyUsername);
+                        WriteLaunchProperty(p.StandardInput, "phuc.proxy.pass", proxyPassword);
+                    }
                     p.StandardInput.Close();
                 } catch { try { p.Kill(); } catch { } throw; }
+                if (acc.Process != null) acc.Process.Dispose();
                 acc.Process = p;
+                acc.HiddenWindows.Clear();
                 acc.StartTime = DateTime.Now;
                 acc.UserStopped = false;
                 acc.NextRestartAt = DateTime.MinValue;
@@ -1604,6 +1734,7 @@ namespace PhucHsoManager
             }
             catch (Exception ex)
             {
+                acc.UserStopped = true;
                 MessageBox.Show("Lỗi khi mở bản game:\n" + ex.Message, "Lỗi khởi chạy", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -1652,43 +1783,53 @@ namespace PhucHsoManager
 
         private void StopAll()
         {
+            CancelBatchLaunch();
             int stopped = 0;
             foreach (var acc in accounts)
             {
-                if (acc.IsRunning)
-                {
-                    StopAccount(acc);
-                    stopped++;
-                }
+                bool wasRunning = acc.IsRunning;
+                if (StopAccount(acc) && wasRunning) stopped++;
             }
             lblStatus.Text = string.Format("Đã dừng {0} bản game.", stopped);
         }
 
-        private void StopAccount(AccountItem acc)
+        private bool StopAccount(AccountItem acc)
         {
             ReadStatistics(acc);
             acc.UserStopped = true;
+            acc.NextRestartAt = DateTime.MinValue;
             if (acc.IsRunning)
             {
                 try
                 {
                     acc.Process.Kill();
+                    if (!acc.Process.WaitForExit(1500)) {
+                        lblStatus.Text = "Game chưa thoát; hãy thử dừng lại: " + acc.DisplayName;
+                        return false;
+                    }
                 }
-                catch { }
+                catch (Exception ex) {
+                    if (acc.IsRunning) {
+                        lblStatus.Text = "Không dừng được game: " + ex.Message;
+                        return false;
+                    }
+                }
             }
+            if (acc.Process != null) acc.Process.Dispose();
             acc.Process = null;
             acc.WindowHandle = IntPtr.Zero;
+            acc.HiddenWindows.Clear();
             lblStatus.Text = string.Format("Đã dừng tài khoản: {0}", acc.DisplayName);
             dgvAccounts.Refresh();
             SaveAccounts();
+            return true;
         }
 
         private void RestartSelected()
         {
             AccountItem acc = GetSelectedAccount();
             if (acc == null) return;
-            StopAccount(acc);
-            Thread.Sleep(800);
+            if (!StopAccount(acc)) return;
             LaunchProcess(acc);
         }
 
@@ -1709,7 +1850,7 @@ namespace PhucHsoManager
             try {
                 string path = acc.ControlFile + ".stats";
                 return File.Exists(path) && acc.ReadTradeSnapshot(File.ReadAllText(path));
-            } catch (IOException) { return false; }
+            } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
         }
 
         private void WriteRuntimeSettings(AccountItem acc)
@@ -1812,6 +1953,10 @@ namespace PhucHsoManager
 
         private void AddAccount()
         {
+            if (accountsLoadFailed) {
+                lblStatus.Text = "Chưa thể thêm tài khoản: sửa accounts.json rồi mở lại quản lí để tránh mất dữ liệu.";
+                return;
+            }
             string newId = AccountItem.NewProfileId();
             AccountItem item = new AccountItem
             {
@@ -1914,7 +2059,7 @@ namespace PhucHsoManager
 
             if (r == DialogResult.Yes)
             {
-                StopAccount(acc);
+                if (!StopAccount(acc)) return;
                 accounts.Remove(acc);
                 SaveAccounts();
                 RefreshGrid();
@@ -1929,7 +2074,7 @@ namespace PhucHsoManager
                 if (dlg.ShowDialog() == DialogResult.OK)
                 {
                     lblStatus.Text = "Đã lưu cài đặt mới.";
-                    foreach (var acc in accounts) if (acc.IsRunning) WriteRuntimeSettings(acc);
+                    foreach (var acc in accounts) if (acc.IsRunning) QueueRuntimeSettings(acc);
                 }
             }
         }
@@ -1950,7 +2095,7 @@ namespace PhucHsoManager
                     string json = File.ReadAllText(AccountsFile, Encoding.UTF8);
                     JavaScriptSerializer jss = new JavaScriptSerializer();
                     List<AccountItem> list = jss.Deserialize<List<AccountItem>>(json);
-                    if (list != null && list.Count > 0)
+                    if (list != null && !list.Contains(null))
                     {
                         accounts = list;
                         AccountItem.EnsureUniqueProfiles(accounts);
@@ -1958,9 +2103,16 @@ namespace PhucHsoManager
                         RefreshGrid();
                         return;
                     }
+                    throw new InvalidDataException("Danh sách tài khoản không hợp lệ.");
                 }
             }
-            catch { }
+            catch (Exception ex) {
+                accountsLoadFailed = true;
+                accounts = new List<AccountItem>();
+                RefreshGrid();
+                lblStatus.Text = "Không đọc được accounts.json; giữ nguyên file. Sửa file rồi mở lại quản lí. " + ex.Message;
+                return;
+            }
 
             // Default sample accounts
             accounts = new List<AccountItem>
@@ -2008,13 +2160,14 @@ namespace PhucHsoManager
 
         private void SaveAccounts()
         {
+            if (accountsLoadFailed) return;
             try
             {
                 JavaScriptSerializer jss = new JavaScriptSerializer();
                 string json = jss.Serialize(accounts);
-                File.WriteAllText(AccountsFile, FormatJson(json), Encoding.UTF8);
+                AtomicFile.Write(AccountsFile, FormatJson(json));
             }
-            catch { }
+            catch (Exception ex) { lblStatus.Text = "Không lưu được tài khoản: " + ex.Message; }
         }
 
         private static string FormatJson(string json)
@@ -2119,8 +2272,19 @@ namespace PhucHsoManager
                 else SetAllVisible(true); // Do not leave inaccessible hidden games after manager exits.
             }
 
+            CancelBatchLaunch();
+            updateTimer.Stop();
             SaveAccounts();
             base.OnFormClosing(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) {
+                CancelBatchLaunch();
+                if (updateTimer != null) updateTimer.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 

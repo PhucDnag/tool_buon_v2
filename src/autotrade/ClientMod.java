@@ -657,6 +657,8 @@ public final class ClientMod {
             int y=42;
             line(g,"PhucHso | "+GameCanvas.loadmap.nameMap+" #"+GameCanvas.loadmap.idMap+" [Phím M]",y); y+=11;
             line(g,"Đánh: "+on(Player.isAutoFire==1)+" HP/MP: "+on(Player.isAutoHPMP)+" Nhặt: "+on(Player.autoItem!=null),y); y+=11;
+            line(g,autotrade.ProxyConnection.hud(),y); y+=11;
+            if (autotrade.ProxyConnection.enabled()) { line(g,"SOCKS5: "+System.getProperty("phuc.proxy.host")+":"+System.getProperty("phuc.proxy.port"),y); y+=11; }
             line(g,status,y); y+=11;
             line(g,TradeConfig.ANIMALS[config.animal]+" | "+TradeConfig.GEMS[config.gem]+" | Bãi: "+TradeConfig.MARKETS[config.market],y); y+=11;
             line(g,"HP thú: "+(animal==null ? "--" : animal.hp+"/"+animal.maxHp)+" | Hàng: "+(live.view.cargo<0 ? "--" : ""+live.view.cargo)+"/"+TradeConfig.MAX_CARGO[config.animal],y); y+=11;

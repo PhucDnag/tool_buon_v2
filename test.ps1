@@ -1,6 +1,10 @@
 param([string]$Java = 'C:\Program Files\Java\jre1.8.0_503\bin\java.exe', [string]$Jar = 'dist\KnightOnline_PhucHso_v2.jar')
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+& $Java -jar tools\ecj.jar -encoding UTF-8 -source 1.7 -target 1.7 -nowarn -cp "$Jar;tools\microemulator.jar" -d build\tests tests\ProxyConnectionTest.java
+if ($LASTEXITCODE -ne 0) { throw 'Proxy test compilation failed' }
+& $Java -Xverify:all -cp "build\tests;$Jar;tools\microemulator.jar" ProxyConnectionTest $Jar
+if ($LASTEXITCODE -ne 0) { throw 'Proxy transport regression failed' }
 & $Java -jar tools\ecj.jar -encoding UTF-8 -source 1.7 -target 1.7 -nowarn -cp $Jar -d build\tests tests\RuntimeMaintenanceTest.java
 if ($LASTEXITCODE -ne 0) { throw 'Maintenance test compilation failed' }
 & $Java -Xverify:all -cp "build\tests;$Jar" RuntimeMaintenanceTest
