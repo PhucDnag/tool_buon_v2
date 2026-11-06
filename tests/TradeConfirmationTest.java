@@ -159,7 +159,7 @@ public final class TradeConfirmationTest {
         check(engine.status.indexOf("Chờ xác nhận mua (2/2)") >= 0, "Engine updates status to retry attempt 2");
         // Third timeout -> exhausted -> now fails
         engine.tick(live.view, 64000);
-        check(engine.state == TradeEngine.STOP, "Engine stops after exhausting retry attempts");
+        check(engine.state == TradeEngine.RESYNC, "Engine synchronizes after exhausting immediate retry attempts");
         check(engine.status.indexOf("Chưa xác nhận giao dịch mua") >= 0, "Engine reports failure only after 3 full cycles");
 
         // Exact full message must end purchasing without waiting for the retry timeout.
@@ -224,6 +224,7 @@ public final class TradeConfirmationTest {
         live.menu(options("Bán hàng"),2,77,""); live.tick(replacement,14000);
         live.menu(options("Bán tất cả hàng"),3,77,""); live.tick(replacement,15000);
         check(net.lastNpc==77 && net.lastIndex==0,"Continue sale submenu even after initial sell selection");
+        GameScreen.player.gold+=12345;
         graham.strChatPopup="Bán hàng thành công"; live.chat(graham); live.tick(replacement,16000);
         check(live.engine.state==TradeEngine.WAIT_RECALL && live.view.cargo==0,
             "Graham acknowledgement completes sale and cancels the remaining empty animal");

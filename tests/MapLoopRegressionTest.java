@@ -280,6 +280,26 @@ public final class MapLoopRegressionTest {
         check(KnownRoutes.next("Khe Vực",target).equals("rung ao giac"),"Dead-end forest branch returns to world network");
         check(KnownRoutes.next("Hầm Mộ Tầng 3",target)!=null,"Dungeon branch joins trading network");
         check(KnownRoutes.next("Nghĩa Địa Tàu Đắm",target)!=null,"Coastal branch joins trading network");
+        // Returning to collect an animal must not blacklist a successful exit.
+        graph=new MapGraph(); nav=new Navigator(graph);
+        enter(nav,34,"Khu phía Tây",new String[]{"Sa Mạc","Thành Phố Kho Báu"},400000);
+        nav.go(TradeConfig.SELLER_MAP,-1,null,402000);
+        check(nav.status.equals("Đi tới Thành Phố Kho Báu"),"West district selects city portal for selling");
+        enter(nav,33,"Thành Phố Kho Báu",new String[]{"Khu phía Tây","Rừng Chết"},404000);
+        nav.go(TradeConfig.SELLER_MAP,-1,null,406000);
+        enter(nav,34,"Khu phía Tây",new String[]{"Sa Mạc","Thành Phố Kho Báu"},408000);
+        nav.go(TradeConfig.SELLER_MAP,-1,null,410000);
+        check(graph.canUse("Khu phía Tây","Thành Phố Kho Báu")
+                && nav.status.equals("Đi tới Thành Phố Kho Báu") && GameScreen.player.posTransRoad!=null,
+            "Revisited west district can reuse its successfully crossed city portal");
+        // ID and name packets are not necessarily installed in the same tick.
+        nav=new Navigator(new MapGraph());
+        enter(nav,34,"Thành Phố Kho Báu",new String[]{"Sa Mạc","Thành Phố Kho Báu"},420000);
+        GameCanvas.loadmap.nameMap="Khu phía Tây";
+        check(!nav.go("Thành Phố Kho Báu",-1,null,422000)
+                && nav.status.equals("Đi tới Thành Phố Kho Báu") && GameScreen.player.posTransRoad!=null,
+            "Late west district name cannot falsely report arrival at city");
+        check(nav.graph.nameFor(34).equals("khu phia tay"),"Record corrected name for current map ID");
         System.out.println("PASS map-loop regression: "+checks+" assertions");
     }
 }

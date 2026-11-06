@@ -57,6 +57,7 @@ public final class ClientFlowTests {
         live.dialog(unrelated,"Bạn muốn xóa vật phẩm?",unrelatedCommands);live.tick(beast,16000);
         check(((iCommand)unrelatedCommands.elementAt(0)).calls==0,"Never accept unrelated destructive prompt");
         live.serverText("Bán hàng thành công");live.tick(null,17000);
+        live.tick(null,19000); // Allow the bounded wallet-packet wait when no price was supplied.
         check(live.engine.state==TradeEngine.TO_MARKET&&live.view.cargo==0,"Sale acknowledged and animal gone loops to market");
         check(net.potionCalls==1,"No second summon in completed cycle");
 
@@ -75,6 +76,27 @@ public final class ClientFlowTests {
             check(!TradeConfig.isMount(noiseCat4.Id, noiseCat4.ItemCatagory, noiseCat4.itemName), "Must reject non-mount item even if category 4: " + noiseItems[i]);
         }
 
+        TradeRecovery.clear();
+        GameCanvas.currentDialog=null;
+        LiveTrade missing=new LiveTrade(new TradeConfig(),graph);
+        missing.toggle(20000); missing.engine.resumeEscort(20000);
+        missing.tick(null,20000);
+        check(missing.engine.state==TradeEngine.TO_SELL,"Allow brief animal loading gap");
+        missing.tick(null,22000);
+        check(missing.engine.state==TradeEngine.RECOVER,"Missing escort recovers without previous animal flag");
+        missing.tick(null,203000);
+        check(missing.engine.state==TradeEngine.TO_MARKET,"Missing escort recovery has bounded timeout");
+        check(missing.detail.indexOf("Chờ thú")<0,"Expired escort does not retain stale waiting detail");
+        TradeRecovery.clear();
+        LiveTrade transientGap=new LiveTrade(new TradeConfig(),graph);
+        transientGap.toggle(210000); transientGap.engine.resumeEscort(210000);
+        transientGap.tick(null,210000);
+        transientGap.view.cargo=-1;
+        transientGap.tick(beast,211000);
+        check(transientGap.engine.state==TradeEngine.TO_SELL,"Animal arriving during grace period keeps escort");
+        transientGap.tick(null,211500);
+        check(transientGap.engine.state==TradeEngine.TO_SELL,"New disappearance starts a fresh grace period");
+        TradeRecovery.clear();
         System.out.println("PASS live adapter cycle: "+checks+" assertions");
     }
 }

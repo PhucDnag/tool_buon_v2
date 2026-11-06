@@ -28,6 +28,8 @@ public final class TradeRecovery {
             return (expectedCharId < 0 || this.charId == expectedCharId)
                 && map != null && map.length() > 0
                 && x >= 0 && y >= 0
+                && cargo>=-1 && market>=0 && market<TradeConfig.MARKETS.length
+                && gem>=0 && gem<TradeConfig.GEMS.length && animal>=0 && animal<TradeConfig.ANIMALS.length
                 && (now <= 0 || timestamp <= 0 || (now - timestamp >= 0 && now - timestamp <= 15 * 60 * 1000L));
         }
     }

@@ -24,6 +24,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Reconnect regression failed' }
 New-Item -ItemType Directory -Force build\simulation | Out-Null
 $fakeSources = @(Get-ChildItem tests\fakes -Recurse -Filter *.java | ForEach-Object { $_.FullName })
 $logicSources = @('LowDetail','LowDetailRenderer','OwnedAnimal','TradeEarnings','TradeConfig','TradeStock','TradeSignals','TradeEngine','MapGraph','KnownRoutes','WorldTopology','GridPath','Navigator','TradeRecovery','LiveTrade') | ForEach-Object { "src\autotrade\$_.java" }
+& $Java -jar tools\ecj.jar -encoding UTF-8 -source 1.7 -target 1.7 -nowarn -d build\simulation @fakeSources @logicSources tests\AutoTradeLifecycleTest.java
+if ($LASTEXITCODE -ne 0) { throw 'Lifecycle simulation compilation failed' }
+& $Java -Xverify:all -cp build\simulation AutoTradeLifecycleTest
+if ($LASTEXITCODE -ne 0) { throw 'Automatic trade lifecycle regression failed' }
 & $Java -jar tools\ecj.jar -encoding UTF-8 -source 1.7 -target 1.7 -nowarn -d build\simulation @fakeSources @logicSources tests\ClientFlowTests.java tests\MovementVerificationTest.java tests\MapLoopRegressionTest.java tests\TradeConfirmationTest.java tests\DylanPurchaseRegressionTest.java tests\OwnedAnimalTest.java tests\LowDetailTest.java
 if ($LASTEXITCODE -ne 0) { throw 'Simulation compilation failed' }
 & $Java -Xverify:all -cp build\simulation OwnedAnimalTest

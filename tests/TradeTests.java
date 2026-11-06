@@ -83,7 +83,7 @@ public final class TradeTests {
         retryEngine.tick(retryView,47000); retryEngine.tick(retryView,49000); retryEngine.tick(retryView,50000);
         check(retryPort.sells==3,"Third attempt allowed");
         retryEngine.tick(retryView,71000);
-        check(retryEngine.state==TradeEngine.STOP && retryPort.sells==3,"Stop after bounded retries rather than hanging or spamming");
+        check(retryEngine.state==TradeEngine.RESYNC && retryPort.sells==3,"Pause mutations after bounded retries until fresh synchronization");
         for (int cargo=0;cargo<2;cargo++) {
             TradeConfig lastConfig=new TradeConfig(); lastConfig.market=2;
             Port lastPort=new Port(); TradeEngine.View lastView=new TradeEngine.View(); lastView.market=2;
@@ -166,7 +166,7 @@ public final class TradeTests {
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v); v.animalMissing=true; e.tick(v,1000); e.tick(v,20000);
         check(e.state==TradeEngine.RECOVER,"Search lost animal for full twenty seconds");
         e.tick(v,21000); check(e.state==TradeEngine.TO_MARKET && p.summons==0,"Reset only after full recovery period, no immediate summon");
-        p=new Port(); v=new TradeEngine.View(); e=begin(p,v); v.dead=true;
+        p=new Port(); v=new TradeEngine.View(); e=begin(p,v); v.dead=true; v.hasReviveItem=true;
         e.tick(v,1000); e.tick(v,9999); check(p.resurrects==0,"No early resurrection");
         e.tick(v,12000); e.tick(v,13000); check(p.resurrects==1,"Resurrection sent once per death");
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v); v.connected=false; e.tick(v,1000);
@@ -242,12 +242,12 @@ public final class TradeTests {
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
         e.state=TradeEngine.SELL; v.atSeller=true; e.tick(v,1000);
         e.tick(v,40000);
-        check(e.state==TradeEngine.STOP && p.sells==1,"Unknown sale outcome stops after synchronization grace period");
+        check(e.state==TradeEngine.RESYNC && p.sells==1,"Unknown sale outcome enters synchronization without repeating sale");
         TradeConfig fastSale=new TradeConfig(); fastSale.saleTimeoutMs=4000; fastSale.maxSaleAttempts=2;
         p=new Port(); v=new TradeEngine.View(); e=new TradeEngine(fastSale,p); e.start(0);
         v.animal=true; v.cargo=2; v.atSeller=true; e.state=TradeEngine.SELL;
         for (int n=0;n<30;n++) e.tick(v,n*1000L);
-        check(e.state==TradeEngine.STOP && p.sells==2,"Fast sale policy also bounds rejected sale attempts");
+        check(e.state==TradeEngine.RESYNC && p.sells==2,"Fast sale policy bounds attempts before automatic synchronization");
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
         v.animal=true; v.cargo=6; v.hp=1; v.maxHp=100; e.state=TradeEngine.TO_SELL;
         e.tick(v,1000); v.animal=false; e.tick(v,2000);
@@ -256,7 +256,24 @@ public final class TradeTests {
         v.gemDrops=true; v.cargo=1; e.tick(v,8000);
         check(e.state==TradeEngine.WAIT_NEW,"Partial pickup keeps collecting remaining drops");
         e.onActionProgress(31000); e.tick(v,33000);
-        check(e.state==TradeEngine.STOP,"Uncollectable drops and repeated menus cannot extend replacement forever");
+        check(e.state==TradeEngine.TO_SELL,"Uncollectable drops cannot stop a trip with recovered cargo");
+        for (int outcome=0;outcome<3;outcome++) {
+            p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
+            v.animal=true; v.cargo=6; v.hp=1; v.maxHp=100; e.state=TradeEngine.TO_SELL;
+            e.tick(v,1000); v.animal=false; e.tick(v,2000);
+            v.animal=outcome!=0; v.hp=100; v.cargo=outcome==1 ? 0 : -1;
+            v.gemDrops=outcome==1; e.tick(v,33000);
+            if (outcome==0) {
+                check(e.state==TradeEngine.TO_MARKET,"Missing replacement animal starts a new trip after grace period");
+                e.tick(v,35000);
+                e.onStock(0,e.stockRequest(),"Kim Cương: 5",35100); e.tick(v,36000);
+                check(e.state==TradeEngine.SUMMON,"Lost trip returns to stock check and summon");
+            } else if (outcome==1) {
+                check(e.state==TradeEngine.RECALL,"Robbed empty animal is recalled even with uncollectable drops");
+                e.tick(v,34000); v.animal=false; e.tick(v,35000);
+                check(e.state==TradeEngine.TO_MARKET,"Confirmed recall of empty animal starts new trip");
+            } else check(e.state==TradeEngine.RESYNC,"Unknown inventory on a visible animal waits for synchronization, not cargo cancellation");
+        }
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
         e.state=TradeEngine.SELL; v.atSeller=true; v.animal=true; v.cargo=6; e.tick(v,1000);
         v.dead=true; e.tick(v,2000); e.tick(v,14000);

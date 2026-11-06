@@ -30,7 +30,14 @@ public final class MapGraph {
     }
     private final Vector observed = new Vector(), ids = new Vector();
     public void observed(String name,int id) {
-        name=TradeStock.normalize(name).trim(); int index=observed.indexOf(name);
+        name=TradeStock.normalize(name).trim();
+        // A late map-name packet supersedes the old name for this ID.
+        for (int i=ids.size()-1;i>=0;i--) {
+            if (((Integer)ids.elementAt(i)).intValue()==id && !name.equals(observed.elementAt(i))) {
+                ids.removeElementAt(i); observed.removeElementAt(i);
+            }
+        }
+        int index=observed.indexOf(name);
         if (index<0) { observed.addElement(name); ids.addElement(new Integer(id)); }
         else ids.setElementAt(new Integer(id),index);
     }

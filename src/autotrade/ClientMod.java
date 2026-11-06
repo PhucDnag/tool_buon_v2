@@ -567,7 +567,17 @@ public final class ClientMod {
         reconnectAt=now+Math.min(300000L,30000L*(1L<<Math.min(reconnectAttempts++,3)));
         status="Đang kết nối lại";
         selectionSent=false; SelectCharScreen.IDCHAR=charId; SelectCharScreen.reSelect=false;
-        GameCanvas.login.checkLoginAgain(GameCanvas.IndexServer);
+        // Leave the stale world before opening a socket: a connected socket alone
+        // does not mean that the old player has logged back in.
+        GameCanvas.currentDialog=null;
+        GameCanvas.currentScreen=GameCanvas.login;
+        if (applyManagerLogin()) {
+            // checkLoginAgain silently skips login without user_pass RMS (or
+            // with a different saved server). Manager credentials need no RMS.
+            GameCanvas.login.commandTab(0,0);
+        } else {
+            GameCanvas.login.checkLoginAgain(GameCanvas.IndexServer);
+        }
     }
     private static void selectCharacter(SelectCharScreen screen,int index) {
         SelectionBridge.select(screen,index);
@@ -664,7 +674,9 @@ public final class ClientMod {
             line(g,"HP thú: "+(animal==null ? "--" : animal.hp+"/"+animal.maxHp)+" | Hàng: "+(live.view.cargo<0 ? "--" : ""+live.view.cargo)+"/"+TradeConfig.MAX_CARGO[config.animal],y); y+=11;
             if (GameScreen.pet!=null) { line(g,"Pet: "+GameScreen.pet.name+" ("+GameScreen.pet.hp+"/"+GameScreen.pet.maxHp+")",y); y+=11; }
             line(g,"HS: "+(config.reviveMinMs==0?"Ngay":config.reviveMinMs/1000+"–"+config.reviveMaxMs/1000+"s")+" | Đổi HP<"+TradeConfig.HP[config.hpIndex]+"%",y); y+=11;
-            line(g,latestStock,y); y+=11;
+            if (live.engine.state==TradeEngine.STOCK || live.isBuying()) {
+                line(g,latestStock,y); y+=11;
+            }
             MainObject focus=GameScreen.ObjFocus;
             if (focus!=null) line(g,displayName(focus)+" ID="+focus.ID+" Type="+focus.typeObject,y);
         } finally { g.translate(tx,ty); }

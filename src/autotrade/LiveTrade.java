@@ -21,6 +21,7 @@ public final class LiveTrade implements TradeEngine.Port {
     public final TradeEarnings earnings=new TradeEarnings();
     public long saleAmount=-1;
     private long goldBeforeSale=-1;
+    private long receiptWaitUntil;
     private final TradeConfig config;
     private final Vector events=new Vector();
     private MainObject beast,buyer,seller;
@@ -122,7 +123,7 @@ public final class LiveTrade implements TradeEngine.Port {
         }
         engine.start(now);
     }
-    private void clearIntent() { sellStart=0; goldBeforeSale=-1; cargoRequestAnimal=-1; intent=0; menu=null; shop=null; cachedShop=null; hiddenShop=false; hiddenDialog=null; lastPurchase=0; purchaseSent=false; itemPurchaseSent=false; saleSent=false; saleAcknowledged=false; saleConfirmedAt=0; lastConfirmedText=null; }
+    private void clearIntent() { receiptWaitUntil=0; sellStart=0; goldBeforeSale=-1; cargoRequestAnimal=-1; intent=0; menu=null; shop=null; cachedShop=null; hiddenShop=false; hiddenDialog=null; lastPurchase=0; purchaseSent=false; itemPurchaseSent=false; saleSent=false; saleAcknowledged=false; saleConfirmedAt=0; lastConfirmedText=null; recalled=false; summoned=false; }
     public boolean hasLostTrip() { return (recoveryMap!=null && recoveryMap.length()>0) || (lastBeastMap!=null && lastBeastMap.length()>0) || hadBeast; }
     public boolean ready() { return GameScreen.player!=null; }
     public void notifyUser(String text) { detail=text; GameCanvas.addInfoChar(text); }
@@ -241,9 +242,12 @@ public final class LiveTrade implements TradeEngine.Port {
         }
     }
     public void recoverPreviousMap() {
+        if (recoveryMap==null || recoveryMap.length()==0)
+            recoveryMap=(lastBeastMap!=null && lastBeastMap.length()>0) ? lastBeastMap : navigation.previousMap;
+        detail="Đang tìm lại thú; chờ xác minh map cũ";
         if (recoveryMap!=null && recoveryMap.length()>0) {
             if (GameCanvas.loadmap!=null && Navigator.same(GameCanvas.loadmap.nameMap,recoveryMap)) {
-                if (lastBeastX>0 && lastBeastY>0) navigation.walk(lastBeastX,lastBeastY,2,null,lastNow);
+                if (lastBeastX>=0 && lastBeastY>=0) navigation.walk(lastBeastX,lastBeastY,2,null,lastNow);
                 detail="Tìm thú trong "+recoveryMap;
             } else {
                 navigation.go(recoveryMap,-1,null,lastNow);
@@ -295,7 +299,10 @@ public final class LiveTrade implements TradeEngine.Port {
         }
     }
     public void resetLostTrip() {
+        detail="";
         clearIntent(); hadBeast=false; absentAt=0; view.cargo=0; view.full=false; view.animalMissing=false; leashSecured=false;
+        reconnecting=false; resumeEscorting=false; resumeBuying=false; cargoRequestAnimal=-1;
+        oldBeast=-1; navigation.resetJourney();
         lastBeastMap=""; lastBeastX=-1; lastBeastY=-1; recoveryMap="";
         TradeRecovery.clear();
     }
@@ -371,7 +378,9 @@ public final class LiveTrade implements TradeEngine.Port {
                         && (TradeSignals.gem(drop.name,0) || TradeSignals.gem(drop.name,1) || TradeSignals.gem(drop.name,2))) view.gemDrops=true;
             }
         }
+        boolean wasDead=view.dead;
         view.dead=GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4);
+        if (view.dead && !wasDead) clearIntent();
         view.hasReviveItem=hasReviveItem();
         view.animal=beast!=null;
         if (view.dead) {
@@ -389,7 +398,7 @@ public final class LiveTrade implements TradeEngine.Port {
                 if ((changedMap || now>=nextRecoverySave) && (engine.state==TradeEngine.TO_SELL || engine.state==TradeEngine.RECOVER || view.cargo>0)) {
                     nextRecoverySave=now+5000;
                     TradeRecovery.save(GameScreen.player!=null ? GameScreen.player.ID : -1,
-                        lastBeastMap,lastBeastX,lastBeastY,view.cargo,config.market,config.gem,config.animal,now);
+                        lastBeastMap,lastBeastX,lastBeastY,view.cargo,engine.market,config.gem,config.animal,now);
                 }
             }
             if (summoned && beast.ID!=oldBeast && engine.state==TradeEngine.SUMMON) {
@@ -405,9 +414,10 @@ public final class LiveTrade implements TradeEngine.Port {
                 absentAt=now;
                 recoveryMap=(lastBeastMap!=null && lastBeastMap.length()>0) ? lastBeastMap : navigation.previousMap;
                 TradeRecovery.save(GameScreen.player!=null ? GameScreen.player.ID : -1,
-                    recoveryMap,lastBeastX,lastBeastY,view.cargo,config.market,config.gem,config.animal,now);
+                    recoveryMap,lastBeastX,lastBeastY,view.cargo,engine.market,config.gem,config.animal,now);
             }
-            if (!hadBeast && !reconnecting) view.cargo=0;
+            // No visible animal is not evidence of an empty inventory. A
+            // delayed existing animal must be queried before recall or buying.
         }
         view.animalMissing=hadBeast && beast==null && !recalled && !saleSent && absentAt>0 && now-absentAt>=2000;
         view.market=-1;
@@ -421,7 +431,10 @@ public final class LiveTrade implements TradeEngine.Port {
         if (resumeEscorting) {
             if (beast==null) {
                 Navigator.stop(); detail="Chờ tìm lại thú trước khi dắt tiếp";
-                if (now>=resumeEscortUntil) { resumeEscorting=false; engine.stop(); detail="Chưa thấy thú cũ; hãy đến gần thú rồi bật lại"; }
+                if (now>=resumeEscortUntil) {
+                    resetLostTrip(); engine.start(now);
+                    detail="Không còn thú cũ; về bãi mua chuyến mới";
+                }
                 return;
             }
             resumeEscorting=false;
@@ -445,11 +458,20 @@ public final class LiveTrade implements TradeEngine.Port {
             Navigator.stop();
         }
         Event event; for (int n=0;n<128 && (event=poll())!=null;n++) process(event,now);
-        boolean saleFinished = (saleAcknowledged || beast==null || (hadBeast && view.cargo==0 && !view.full) || (goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale));
-        if (saleSent && saleFinished && !view.dead && seller!=null && distance(seller)<=64 && view.connected && Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP) && (saleAcknowledged || beast==null || view.cargo==0 || (goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale) || now-absentAt>=2000)) {
+        boolean goldReceived=goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale;
+        boolean emptyAnimal=beast!=null && view.cargo==0 && !view.full;
+        boolean saleFinished=saleAcknowledged || emptyAnimal || goldReceived && beast==null;
+        if (engine.state==TradeEngine.WAIT_SALE && saleSent && saleFinished && !view.dead && seller!=null && distance(seller)<=64 && view.connected && Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP)) {
             if (engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL) {
                 if (saleAmount<0 && goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale) {
                     saleAmount=GameScreen.player.gold-goldBeforeSale;
+                }
+                // A success packet can precede the wallet packet. Keep the sale
+                // context briefly so the next trip cannot erase its baseline.
+                if (saleAmount<0 && goldBeforeSale>=0) {
+                    saleAcknowledged=true;
+                    if (receiptWaitUntil==0) receiptWaitUntil=now+2000;
+                    if (now<receiptWaitUntil) return;
                 }
                 earnings.complete(saleAmount);
             }
@@ -457,13 +479,16 @@ public final class LiveTrade implements TradeEngine.Port {
             lastBeastMap=""; lastBeastX=-1; lastBeastY=-1; recoveryMap="";
             TradeRecovery.clear();
         }
-        if (recalled && beast==null && engine.state!=TradeEngine.WAIT_REPLACE && engine.state!=TradeEngine.WAIT_NEW) {
+        if (recalled && beast==null && engine.state==TradeEngine.WAIT_RECALL) {
             intent=0; hadBeast=false; view.animalMissing=false; TradeRecovery.clear();
         }
         if (reconnecting && view.cargo>=0) { reconnecting=false; intent=0; }
+        int stateBeforeTick=engine.state;
         engine.tick(view,now);
+        if ((engine.state==TradeEngine.RECOVER || engine.state==TradeEngine.RESYNC) && stateBeforeTick!=engine.state) clearIntent();
         if ((engine.state==TradeEngine.TO_SELL || engine.state==TradeEngine.TO_MARKET)
                 && (intent==BUY || intent==QUERY || intent==SUMMON || intent==RECALL)) clearIntent();
+        if (engine.state==TradeEngine.TO_MARKET && intent==SELL) clearIntent();
         if (isBuying() && GameScreen.ObjFocus!=beast) {
             if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu && isBeastMenu(GameCanvas.menu2.menuItems)) GameCanvas.menu2.isShowMenu=false;
         }
@@ -495,10 +520,11 @@ public final class LiveTrade implements TradeEngine.Port {
         }
         if (!active()) { clearIntent(); return; }
         if (engine.state==TradeEngine.PAUSED || view.dead) return;
-        if (engine.state==TradeEngine.WAIT_NEW && beast!=null && now-cargoRequestAt>=3000) {
+        if ((engine.state==TradeEngine.WAIT_NEW || engine.state==TradeEngine.RESYNC) && beast!=null && now-cargoRequestAt>=3000) {
             cargoRequestAnimal=beast.ID; cargoRequestMap=GameCanvas.loadmap.idMap; cargoRequestAt=now;
             info(now);
         }
+        if (engine.state==TradeEngine.RESYNC) return;
         beastHasCargo=beast!=null && (view.cargo>0 || view.full) && engine.state!=TradeEngine.WAIT_NEW;
         if (beastHasCargo) view.gemDrops=false;
         if (view.animal && !beastHasCargo && (view.gemDrops || engine.state==TradeEngine.WAIT_NEW)) {
@@ -562,10 +588,10 @@ public final class LiveTrade implements TradeEngine.Port {
             if (beast!=null && beast.ID==e.id) {
                 view.cargo=e.menu; view.cargoRevision++;
                 // Only authoritative inventory counts, never local purchase estimates.
-                for (int i=0;i<TradeConfig.ANIMALS.length;i++) {
-                    if (TradeSignals.animal(beast.name,i) || config.animal==i)
-                        view.full=e.menu>=TradeConfig.MAX_CARGO[i];
-                }
+                int kind=config.animal;
+                for (int i=0;i<TradeConfig.ANIMALS.length;i++)
+                    if (TradeSignals.animal(beast.name,i)) { kind=i; break; }
+                view.full=e.menu>=TradeConfig.MAX_CARGO[kind];
                 if (e.menu==0) view.full=false;
                 cargoRequestAnimal=-1;
             }
@@ -587,6 +613,23 @@ public final class LiveTrade implements TradeEngine.Port {
             return;
         }
         String s=TradeStock.normalize(e.text);
+        if (TradeSignals.animalNotFound(e.text)) {
+            boolean expected=intent==SELL || intent==BUY || cargoRequestAnimal>=0
+                    || engine.state==TradeEngine.WAIT_SALE;
+            boolean response=e.type==3 || e.type==5
+                    || (e.type==1 || e.type==2) && (seller!=null && e.id==seller.getIDnpc()
+                        || buyer!=null && e.id==buyer.getIDnpc() || e.id==-56);
+            if (active() && response) {
+                // This rejection never proves a sale. Close its own dialog,
+                // including a late reply after navigation has resumed.
+                dismiss(e);
+                if (expected && !view.dead && engine.state!=TradeEngine.PAUSED) {
+                    clearIntent(); leashSecured=false;
+                    engine.onAnimalNotFound(view,now);
+                }
+                return;
+            }
+        }
         boolean stockSource=(e.type==1 || e.type==2) && e.id==queriedNpc && intent==QUERY;
         if (stockSource) {
             TradeStock stock=TradeStock.parse(e.text);
@@ -619,15 +662,18 @@ public final class LiveTrade implements TradeEngine.Port {
         // NPC stock quantities must never be counted as cargo on the animal.
         boolean infoSource=(e.type==2 && e.id==-56 || (e.type==3 || e.type==5) && beast!=null)
                 && reportedStock.choose(0)<0 && !reportedStock.empty();
+        boolean cargoReported=false;
         if (infoSource && e.text!=null) {
             int cargo=TradeSignals.cargo(e.text);
             if (cargo>=0) {
                 view.cargo=cargo;
+                cargoReported=true;
+                if (cargo==0) view.full=false;
                 view.cargoRevision++;
                 if (purchaseSent) { purchaseSent=false; intent=0; dismiss(e); }
             }
         }
-        if (tradeResponse && (purchaseSent || isBuying()) && TradeSignals.bought(s)) {
+        if (!cargoReported && tradeResponse && (purchaseSent || isBuying()) && TradeSignals.bought(s)) {
             view.cargo=Math.max(0,view.cargo)+1; view.cargoRevision++; for (int i=0;i<TradeConfig.ANIMALS.length;i++) if (beast!=null && TradeSignals.animal(beast.name,i)) view.full=view.cargo>=TradeConfig.MAX_CARGO[i]; if (view.full) { purchaseSent=false; intent=0; menu=null; shop=null; } dismiss(e);
         }
         if (tradeResponse && saleSent && TradeSignals.sold(s)) {
@@ -755,8 +801,8 @@ public final class LiveTrade implements TradeEngine.Port {
     private boolean checkAndConfirmSaleDialog(Object dialog, String text, mVector choices, long now) {
         if (dialog==null || choices==null || view.dead || engine.state==TradeEngine.PAUSED || TradeConfig.tradingClosed(now)) return false;
         String s=TradeStock.normalize(text!=null ? text : "");
-        boolean inSellerContext=intent==SELL || engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL
-                || Navigator.same(GameCanvas.loadmap.nameMap, TradeConfig.SELLER_MAP);
+        boolean inSellerContext=intent==SELL && (engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL)
+                && seller!=null && distance(seller)<=64 && Navigator.same(GameCanvas.loadmap.nameMap, TradeConfig.SELLER_MAP);
         boolean isSalePrompt=TradeSignals.sell(s) || s.indexOf("ban tat ca")>=0 || s.indexOf("ban toan bo")>=0
                 || s.indexOf("muon ban")>=0 || (s.indexOf("ban")>=0 && (s.indexOf("vang")>=0 || s.indexOf("gia")>=0));
         if (inSellerContext && isSalePrompt) {
@@ -764,7 +810,7 @@ public final class LiveTrade implements TradeEngine.Port {
             if (amount>0) saleAmount=amount;
             for (int i=0;i<choices.size();i++) {
                 iCommand c=(iCommand)choices.elementAt(i);
-                if (c!=null && (TradeSignals.isConfirmButton(c.caption) || i==0)) {
+                if (c!=null && TradeSignals.isConfirmButton(c.caption)) {
                     saleSent=true;
                     saleConfirmedAt=now;
                     sentAt=now;
@@ -823,7 +869,8 @@ public final class LiveTrade implements TradeEngine.Port {
             detail="C\u1ea7n v\u1eadt ph\u1ea9m th\u00fa bu\u00f4n \u0111\u1ec3 h\u1ee7y th\u00fa"; return;
         }
         if (intent==SUMMON) {
-            if (summoned && !view.animal && now-sentAt>=3000) summoned=false;
+            // Using the same item again can cancel a server-side animal whose
+            // spawn packet is delayed. Wait for acknowledgement or timeout.
             if (!summoned) {
                 Item foundItem=null;
                 for (int i=0;i<Item.VecInvetoryPlayer.size();i++) {
@@ -862,7 +909,10 @@ public final class LiveTrade implements TradeEngine.Port {
             for (int i=0;i<shop.size();i++) {
                 Item item=(Item)shop.elementAt(i);
                 if (item!=null && TradeSignals.gem(item.itemName,argument)) {
-                    purchaseSent=true; itemPurchaseSent=true; sentAt=now; lastPurchase=now; engine.onActionProgress(now);
+                    // Repeated sends are not server progress. Otherwise the
+                    // purchase deadline slides forever when replies are lost.
+                    if (!itemPurchaseSent) engine.onActionProgress(now);
+                    purchaseSent=true; itemPurchaseSent=true; sentAt=now; lastPurchase=now;
                     GlobalService.gI().buy_item((byte)shopId,(short)item.Id,(short)1);
                     return;
                 }

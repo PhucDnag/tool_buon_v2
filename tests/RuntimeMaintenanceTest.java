@@ -6,6 +6,8 @@ public final class RuntimeMaintenanceTest {
     public static void main(String[] args) throws Exception {
         check(TradeEarnings.amount("Bạn nhận được 12.345 vàng") == 12345,"Vietnamese sale amount");
         check(TradeEarnings.amount("Nhận được 12,345 vàng") == 12345,"Thousands separator");
+        check(TradeEarnings.amount("Bán hàng trên Bò vàng nhận được 960.000 vàng") == 960000,"Animal color is not the currency amount");
+        check(TradeEarnings.amount("Bán Lừa vàng nhận được 12,345 xu") == 12345,"Skip animal color before receipt currency");
         check(TradeEarnings.amount("Bán thành công") == -1,"No invented receipt");
         check(TradeEarnings.amount("Nhận được 1.5 vàng") == -1,"Ambiguous amount rejected");
         check(TradeEarnings.amount("Nhận được 100 ngọc") == -1,"Other currency excluded");

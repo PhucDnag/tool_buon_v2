@@ -57,8 +57,8 @@ public final class Navigator {
         if (changed) {
             resetStallWatch();
             stop();
-            if (routeGoal != null && previousMap.length() > 0 && !same(previousMap, current) && !teleported)
-                graph.block(previousMap, current);
+            // A completed transition is not evidence of a blocked portal.
+            // Recovery may legitimately revisit it while keeping the same goal.
             teleported = false;
             previousMap = current;
             current = GameCanvas.loadmap.nameMap;
@@ -77,6 +77,14 @@ public final class Navigator {
             progressAt = now;
             portalSnapshot = null;
             graph.observed(current, mapId);
+        }
+        // The map name can arrive after its ID. Refresh it without treating the
+        // delayed name as another transition or losing the actual previous map.
+        String liveName=GameCanvas.loadmap.nameMap;
+        if (liveName!=null && liveName.trim().length()>0 && !liveName.equals(current)) {
+            current=liveName;
+            portalSnapshot=null;
+            graph.observed(current,mapId);
         }
         // Map packets install names, collision data and portals in separate steps.
         if (now < transitionUntil || LoadMap.vecPointChange == null)
@@ -441,9 +449,14 @@ public final class Navigator {
             return false;
         }
         if (path.length == 0) {
-            if (radius > 0 || MainObject.getDistance(p.x, p.y, x, y) <= 24) {
+            // BFS may have stopped beside a blocked/out-of-bounds destination.
+            // Never manufacture a final movement into the rejected tile.
+            int tx=x/tile, ty=y/tile;
+            boolean unsafe=tx<0 || ty<0 || tx>=w || ty>=h
+                    || GameCanvas.loadmap.mapType[ty*w+tx]==1 || GameCanvas.loadmap.mapType[ty*w+tx]==-1;
+            if (unsafe || radius > 0 || MainObject.getDistance(p.x, p.y, x, y) <= 24) {
                 stop();
-                return true;
+                return !unsafe;
             }
             short[] roads = new short[] { (short) (((x / tile & 0xFF) << 8) | (y / tile & 0xFF)) };
             p.posTransRoad = roads;
@@ -473,8 +486,10 @@ public final class Navigator {
 
         p.posTransRoad = null;
         p.countAutoMove = 0;
-        p.xStopMove = x;
-        p.yStopMove = y;
+        int last=path[len-1];
+        boolean reachesTarget=last%w==x/tile && last/w==y/tile;
+        p.xStopMove = reachesTarget ? x : last%w*tile+tile/2;
+        p.yStopMove = reachesTarget ? y : last/w*tile+tile/2;
         p.toX = p.x;
         p.toY = p.y;
         p.posTransRoad = roads;

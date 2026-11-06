@@ -81,18 +81,18 @@ Sử dụng script `Start-Trade.ps1` để tự động mở MicroEmulator và t
    - Tự động xử lý hộp thoại xác nhận mua (chấp nhận các nút: *OK*, *Đồng ý*, *Xác nhận*, *Có*, *Chấp nhận*).
    - Đọc số hàng thực tế trên thú qua nhiều mẫu cú pháp (`đang chở`, `số hàng`, `số lượng`, `sức chở`, `hàng: X`, `X/Y`).
    - Tự động phát hiện thú đầy tải theo thông báo máy chủ hoặc theo ngưỡng sức chứa tối đa của thú (6/12/24).
-5. **Hộ tống thú về Graham (Map 8 - Thung Lũng Kỳ Bí)**:
-   - Tốc độ di chuyển của nhân vật tự động điều chỉnh theo tốc độ thực tế của thú buôn (`vMax`), không chạy quá xa làm mất thú.
-   - Khoảng cách an toàn tối đa 130 pixel: nếu nhân vật vượt quá 130px sẽ tự động dừng lại và quay về phía thú.
-   - Đường đi an toàn qua địa hình hiểm trở tại **Vách Đá Cheo Leo** (Map 39) bằng hệ thống điểm mốc (waypoints) chống kẹt vách đá.
-   - Khi chuyển map, tool chờ thú xuất hiện ở map mới. Nếu sau 2 giây không thấy thú, nhân vật tự động lùi về map trước tìm kiếm trong 20 giây. Nếu thú bị tiêu diệt, tool reset chuyến và quay về bãi mua.
+5. **Hộ tống thú về Graham (Thung Lũng Kỳ Bí)**:
+   - Nhân vật giảm tốc khi có thú, chờ thú khi cách quá 55px và quay lại nhận thú khi quá 85px hoặc thú đứng yên; tiếp cận trong 35px trước khi dắt tiếp.
+   - Đường đi dùng topology đã xác minh, tọa độ cổng hiện tại và tìm đường tránh vật cản. Bước cuối không đi xuyên ô tường. Không dùng đường tắt tùy ý từ cache hay đi khám phá map chưa biết.
+   - Sau 2 giây không thấy thú đang hộ tống, tool tìm lại tại map/vị trí cuối cùng. Chuyến có hàng có tối đa 3 phút để trở lại và tìm thú, trong đó tìm tại map cũ tối đa 60 giây; các trường hợp khác tìm trong 20 giây. Hết thời hạn sẽ về bãi mua chuyến mới.
 6. **Thay thú khi HP yếu**:
    - Nếu HP thú giảm xuống dưới ngưỡng cài đặt (30%, 50%, 70%, 90%), tool tiến hành cất thú và gọi thú mới.
-   - Bắt buộc kiểm chứng số hàng trên thú mới khớp với số hàng trước đó trước khi tiếp tục hành trình; nếu không khớp sẽ tạm dừng để bảo vệ tài sản của người chơi.
+   - Chờ thú mới rồi nhặt đá quý và kiểm tra túi hàng. Sau thời hạn 30 giây, tiếp tục với hàng đã nhặt được; thú xác nhận rỗng được thu hồi để mua chuyến mới. Túi hàng chưa rõ thì chuyển sang tự đồng bộ, không suy đoán từ số hàng cũ.
 7. **Bán hàng tại NPC Graham**:
-   - Khi đến Map 8 và đứng gần Graham, tool tự động mở menu giao tiếp và chọn lệnh bán (*Bán hàng*, *Bán đá quý*, *Giao hàng*).
-   - Tự động xác nhận hộp thoại bán hàng.
-   - Xác nhận bán thành công khi nhận thông báo máy chủ và thú biến mất; tự động quay lại bãi mua để bắt đầu chuyến tiếp theo.
+   - Khi đến Thung Lũng Kỳ Bí và cả nhân vật lẫn thú ở gần Graham, tool tự động mở menu giao tiếp và chọn lệnh bán (*Bán hàng*, *Bán đá quý*, *Giao hàng*).
+   - Tự chọn nút đồng ý đã nhận diện trong hộp thoại bán; không mặc định chọn nút đầu tiên.
+   - Chỉ hoàn tất giao dịch đang chờ khi có phản hồi bán thành công, túi hàng xác nhận rỗng, hoặc vàng tăng kèm thú biến mất. Thú biến mất riêng lẻ không được tính là bán thành công.
+   - Lỗi giao dịch quá số lần thử chuyển sang chờ đồng bộ 30 giây. Với thú đang hiện, phải có số hàng mới từ server trước khi tự thử tiếp; nếu mất thú thì tìm lại chuyến. Tool không tự tắt chỉ vì phản hồi tạm thời bị thiếu.
 
 ### B. Mạng lưới bản đồ tích hợp (Map Network & Pathfinding)
 - Tích hợp sẵn topology của **hơn 80 map** trong Hiệp Sĩ Online kết nối 4 vùng lớn về Map 8 (Thung Lũng Kỳ Bí).
@@ -101,7 +101,8 @@ Sử dụng script `Start-Trade.ps1` để tự động mở MicroEmulator và t
 
 ### C. Khung giờ & An toàn
 - Tự động tạm dừng hoạt động trong khung giờ buôn bang hội: **10h00 – 16h00 (UTC+7)**, tự động tiếp tục khi hết giờ cấm.
-- Cơ chế hồi sinh: tự động chờ delay 9–11 giây (tránh bị phát hiện bot) trước khi gửi lệnh hồi sinh tại chỗ; nếu sau 6 giây vẫn chưa hồi sinh được (hết ngọc hồi sinh), tool tự động gọi lệnh *Về làng* để tiếp tục hoạt động.
+- Hồi sinh sau thời gian chờ đã cài đặt (mặc định 9–11 giây): có vật phẩm thì thử tại chỗ tối đa 2 lần, cách nhau 4 giây; hết vật phẩm hoặc không hồi sinh được thì về làng. Hồi sinh vẫn hoạt động trong giờ cấm buôn. Sau đó tool tìm lại thú hoặc kiểm tra lại giao dịch bị gián đoạn.
+- Cần có vật phẩm thú buôn, tiền mua hàng và kết nối máy chủ hoạt động. Khi chưa có phản hồi túi hàng hoặc chưa có tuyến map được xác minh, tool báo trạng thái chờ thay vì tự đoán. Các kiểm thử mô phỏng không thay thế kiểm chứng trên server thật.
 
 ### D. Giao diện HUD trực quan
 - Hiển thị tên map và ID map hiện tại.

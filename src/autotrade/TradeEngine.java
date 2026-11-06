@@ -4,7 +4,7 @@ package autotrade;
 public final class TradeEngine {
     public static final int STOP=0, TO_MARKET=1, STOCK=2, SUMMON=3, BUY=4,
         TO_SELL=5, SELL=6, WAIT_SALE=7, RECALL=8, BACKOFF=9, RECOVER=10,
-        REPLACE=11, WAIT_REPLACE=12, WAIT_RECALL=13, PAUSED=14, WAIT_BUY=15, WAIT_NEW=16;
+        REPLACE=11, WAIT_REPLACE=12, WAIT_RECALL=13, PAUSED=14, WAIT_BUY=15, WAIT_NEW=16, RESYNC=17;
     public interface Port {
         boolean ready();
         void stopMovement();
@@ -42,9 +42,14 @@ public final class TradeEngine {
     private boolean waitAtFirstMarket;
     private int saleAttempts, spotReviveAttempts;
     private long sellerArriveAt;
+    private long escortAbsentAt=-1;
+    private int retryState;
+    private long syncRevision;
 
     public TradeEngine(TradeConfig c, Port p) { config=c; port=p; }
     public boolean start(long now) {
+        escortAbsentAt=-1;
+        recoverState=0; replaceState=0; buyAttempts=0; replaceCooldown=0; pickupUntil=0; recoverMapArrival=0;
         if (!port.ready()) { status="Chưa xác minh giao thức máy chủ"; return false; }
         market=config.market; gem=config.gem; selectedGem=config.gem; emptyMask=0; stock=null;
         returnToMarketAfterRecall=false; state=TO_MARKET; due=now; deadline=0; deathAt=0; deathSent=false;
@@ -108,7 +113,24 @@ public final class TradeEngine {
         else { nextMarket(now); return; }
         due=now;
     }
-    private void fail(String reason) { state=STOP; status=reason; port.stopMovement(); port.notifyUser(reason); }
+    private void resync(int next,View view,String reason,long now) {
+        retryState=next; syncRevision=view.cargoRevision;
+        state=RESYNC; due=now+30000; stock=null; awaitingStock=false;
+        port.stopMovement(); status=reason+"; chờ đồng bộ rồi tự thử lại"; port.notifyUser(status);
+    }
+    public void onAnimalNotFound(View view,long now) {
+        if (state==STOP || state==PAUSED || state==RESYNC) return;
+        port.stopMovement(); stock=null; awaitingStock=false;
+        if (view.animal) {
+            resync(state==TO_SELL || state==SELL || state==WAIT_SALE ? TO_SELL : TO_MARKET,
+                view,"NPC chưa nhận thấy thú; kiểm tra lại thú và hàng",now);
+        } else if (port.hasLostTrip()) {
+            recoverState=TO_SELL; state=RECOVER; deadline=now+180000;
+            recoverMapArrival=0; due=now; status="NPC không thấy thú; quay lại tìm thú";
+        } else {
+            state=TO_MARKET; due=now; status="Không thấy thú; về bãi mua kiểm tra chuyến mới";
+        }
+    }
     private void nextMarket(long now) {
         if (waitAtFirstMarket) {
             boolean alreadyHere=market==0;
@@ -153,19 +175,22 @@ public final class TradeEngine {
             // alone cannot prove full, even after a fresh application launch.
             if (view.full || view.market!=market && view.cargo!=0) { state=TO_SELL; due=now; }
         }
-        if (TradeConfig.tradingClosed(now)) {
-            if (state!=PAUSED) { pauseState=state; state=PAUSED; pausedAt=now; port.stopMovement(); }
-            if (lastNotice==0 || now-lastNotice>=60000) { lastNotice=now; port.notifyUser("Tạm dừng buôn 10h–16h (UTC+7)"); }
-            status="Chờ hết giờ cấm buôn"; return;
+        if (state==PAUSED && !TradeConfig.tradingClosed(now)) {
+            state=pauseState;
+            if (deadline>0) deadline+=now-pausedAt;
+            if (recoverMapArrival>0) recoverMapArrival+=now-pausedAt;
+            escortAbsentAt=-1; stock=null; awaitingStock=false; due=now;
+            if (state==STOCK) deadline=0;
         }
-        if (state==PAUSED) { state=pauseState; if (deadline>0) deadline+=now-pausedAt; stock=null; awaitingStock=false; due=now; if (state==STOCK) deadline=0; }
         if (view.dead) {
             if (state==REPLACE || state==WAIT_REPLACE) {
                 state=replaceState>0 ? replaceState : TO_SELL;
             }
             if (deathAt==0) { deathAt=now+config.reviveDelay(random); deathSent=false; spotReviveAttempts=0; port.stopMovement(); }
             if (now>=deathAt && !deathSent) {
-                deathSent=true; spotReviveAttempts=1; port.resurrect(); due=now+4000;
+                deathSent=true;
+                if (view.hasReviveItem) { spotReviveAttempts=1; port.resurrect(); due=now+4000; }
+                else { port.resurrectVillage(); due=now+3000; }
             }
             if (deathSent && now>=due) {
                 if (view.hasReviveItem && spotReviveAttempts<2) {
@@ -185,12 +210,31 @@ public final class TradeEngine {
         if (deathAt!=0) {
             // A sale interrupted by death must recheck the animal and NPC range.
             if (state==WAIT_SALE || state==SELL) { state=TO_SELL; saleAttempts=0; }
+            // Merchant requests from before death are no longer outstanding.
+            if (state==BUY || state==WAIT_BUY || state==STOCK) {
+                state=TO_MARKET; stock=null; awaitingStock=false; buyAttempts=0;
+            }
+            if (state==WAIT_NEW && !view.animal && port.hasLostTrip()) state=TO_SELL;
             if (deadline>0) deadline=Math.max(deadline,now+15000);
             due=now;
         }
         deathAt=0; deathSent=false; spotReviveAttempts=0;
-        if (view.animalMissing && state!=RECOVER && state!=SUMMON && state!=WAIT_NEW && state!=WAIT_RECALL && state!=WAIT_REPLACE && state!=WAIT_SALE) {
-            recoverState=state; state=RECOVER; deadline=now+(recoverState==TO_SELL || view.cargo>0 ? 180000 : 20000); recoverMapArrival=0; due=now;
+        // Trading hours restrict transactions, not resurrection.
+        if (TradeConfig.tradingClosed(now)) {
+            if (state!=PAUSED) { pauseState=state; state=PAUSED; pausedAt=now; port.stopMovement(); }
+            if (lastNotice==0 || now-lastNotice>=60000) { lastNotice=now; port.notifyUser("Tạm dừng buôn 10h–16h (UTC+7)"); }
+            status="Chờ hết giờ cấm buôn"; return;
+        }
+        // Escort must recover even if the adapter lost its previous-animal flag.
+        // Allow a short map-loading gap, but never wait indefinitely in goSeller.
+        if ((state==TO_SELL || state==SELL) && !view.animal) {
+            if (escortAbsentAt<0) escortAbsentAt=now;
+        } else escortAbsentAt=-1;
+        boolean escortMissing=escortAbsentAt>=0 && now-escortAbsentAt>=2000;
+        if ((view.animalMissing || escortMissing) && state!=RECOVER && state!=SUMMON && state!=WAIT_NEW && state!=WAIT_RECALL && state!=WAIT_REPLACE && state!=WAIT_SALE) {
+            recoverState=state;
+            if (state==BUY || state==WAIT_BUY || state==STOCK) { recoverState=TO_MARKET; stock=null; awaitingStock=false; }
+            state=RECOVER; deadline=now+(recoverState==TO_SELL || view.cargo>0 ? 180000 : 20000); recoverMapArrival=0; due=now;
         }
         if (state==RECOVER) {
             if (view.animal) { state=recoverState; due=now; }
@@ -267,7 +311,7 @@ public final class TradeEngine {
                     emptyMask=0;
                     due=now;
                 }
-                else if (now>=deadline) fail("Chưa xác nhận thả thú; dừng để tránh thả trùng");
+                else if (now>=deadline) resync(TO_MARKET,view,"Chưa xác nhận thả thú",now);
                 break;
             case BUY:
                 if (!view.full && selectedGem!=config.gem) {
@@ -288,7 +332,7 @@ public final class TradeEngine {
                         port.buy(gem); deadline=now+10000;
                         status="Chờ xác nhận mua ("+buyAttempts+"/2)";
                     } else {
-                        fail("Chưa xác nhận giao dịch mua; không gửi mua lặp");
+                        resync(TO_MARKET,view,"Chưa xác nhận giao dịch mua",now);
                     }
                 }
                 break;
@@ -304,12 +348,12 @@ public final class TradeEngine {
                 if (now>=deadline) {
                     if (view.animal && (view.cargo>0 || view.full)) {
                         if (saleAttempts>=config.maxSaleAttempts) {
-                            fail("Bán hàng chưa được xác nhận sau "+config.maxSaleAttempts+" lần; kiểm tra Graham");
+                            resync(TO_SELL,view,"Bán hàng chưa được xác nhận sau "+config.maxSaleAttempts+" lần",now);
                             break;
                         }
                         state=TO_SELL; due=now+1000; port.goSeller();
                         status="Bán chưa được; kéo thú buôn thử lại ("+saleAttempts+"/"+config.maxSaleAttempts+")";
-                    } else if (now>=deadline+15000) fail("Không đồng bộ được thú/hàng sau khi bán; kiểm tra chuyến buôn");
+                    } else if (now>=deadline+15000) resync(TO_SELL,view,"Chưa đồng bộ được thú/hàng sau khi bán",now);
                     else status="Chờ đồng bộ thú/hàng trước khi thử bán lại";
                 }
                 break;
@@ -323,7 +367,7 @@ public final class TradeEngine {
                         stock=null; awaitingStock=false; status="Đã hủy thú trống; về bãi mua";
                     } else nextMarket(now);
                 }
-                else if (now>=deadline) fail("Chưa xác nhận thu hồi thú");
+                else if (now>=deadline) resync(RECALL,view,"Chưa xác nhận thu hồi thú",now);
                 break;
             case REPLACE:
                 port.recall(); state=WAIT_REPLACE; deadline=now+10000; break;
@@ -334,7 +378,7 @@ public final class TradeEngine {
                     if (view.animal && (view.cargo>0 || view.full)) {
                         state=replaceState; due=now; replaceCooldown=now+30000;
                         status="Không cất được thú; tiếp tục buôn";
-                    } else fail("Không xác nhận được cất thú để thay");
+                    } else resync(replaceState,view,"Chưa xác nhận được cất thú để thay",now);
                 }
                 break;
             case WAIT_NEW:
@@ -345,7 +389,39 @@ public final class TradeEngine {
                     break;
                 }
                 if (view.gemDrops) pickupUntil=now+2000;
-                if (now>=deadline) fail("Chưa xác nhận thú mới nhặt xong hàng; kiểm tra thú và đá quý");
+                if (now>=deadline) {
+                    if (!view.animal) {
+                        port.stopMovement(); port.resetLostTrip();
+                        state=TO_MARKET; due=now+1000; stock=null; awaitingStock=false;
+                        emptyMask=0; waitAtFirstMarket=false; recoverState=0;
+                        saleAttempts=0; buyAttempts=0; returnToMarketAfterRecall=false;
+                        status="Không còn thú buôn; về bãi mua chuyến mới";
+                    } else if (view.cargo==0 && !view.full) {
+                        port.stopMovement(); returnToMarketAfterRecall=true;
+                        state=RECALL; due=now;
+                        status="Không còn hàng; thu hồi thú để mua chuyến mới";
+                    } else if (view.cargo>0 || view.full) {
+                        replaceCooldown=now+30000; state=replaceState; due=now;
+                        status="Tiếp tục chuyến với số hàng đã nhặt được";
+                    } else resync(replaceState,view,"Chưa xác nhận thú mới nhặt xong hàng",now);
+                }
+                break;
+            case RESYNC:
+                // Only a fresh inventory response may authorize another action
+                // on a visible animal after an ambiguous transaction timeout.
+                if (!view.animal) {
+                    if (port.hasLostTrip()) {
+                        recoverState=TO_SELL; state=RECOVER; deadline=now+180000;
+                        recoverMapArrival=0; due=now; break;
+                    }
+                    port.resetLostTrip(); state=TO_MARKET; due=now;
+                } else if (view.cargoRevision>syncRevision && view.cargo>=0) {
+                    saleAttempts=0; buyAttempts=0; replaceCooldown=now+30000;
+                    if (retryState==RECALL && view.cargo==0 && !view.gemDrops) {
+                        returnToMarketAfterRecall=true; state=RECALL;
+                    } else state=retryState==TO_SELL ? TO_SELL : TO_MARKET;
+                    due=now;
+                } else { status="Chờ xác minh túi hàng trên thú để tự tiếp tục"; due=now+1000; }
                 break;
             case BACKOFF:
                 if (view.market!=0) port.goMarket(0);
