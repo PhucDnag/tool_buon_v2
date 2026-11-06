@@ -1,7 +1,7 @@
 package GameObjects;
 import GameScreen.GameScreen;
 public class MainObject {
- public int ID,typeObject,x,y,hp=100,maxHp=100,vMax=2,Action; public long timedie,gold; public boolean isRemove; public String name="",strChatPopup;
+ public int ID,typeObject,x,y,hp=100,maxHp=100,vMax=2,Action; public long timedie,gold,coin; public boolean isRemove; public String name="",strChatPopup;
  public int npcWireId=-999;
  public int paintCalls;
  public Chat chat;

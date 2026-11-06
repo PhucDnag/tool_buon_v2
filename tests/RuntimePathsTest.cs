@@ -44,6 +44,30 @@ public class RuntimePathsTest : MarshalByRefObject
             Check(dialog != null, "Out-of-range saved launch delay cannot crash settings dialog");
         }
         var income = new AccountItem();
+        string recoveryControl = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Guid.NewGuid().ToString("N") + ".cmd");
+        var recovery = new AccountItem { ControlFile = recoveryControl };
+        try {
+            File.WriteAllText(recoveryControl + ".restart", "animal-not-found\n");
+            Check(!recovery.ShouldRestartStalled(200000), "Animal-not-found message never restarts a game");
+            File.WriteAllText(recoveryControl + ".health", "partial");
+            Check(!recovery.ShouldRestartStalled(200000), "Incomplete heartbeat ignored");
+            File.WriteAllText(recoveryControl + ".health", "200000:0:1");
+            Check(!recovery.ShouldRestartStalled(200000), "Idle character with live tick is healthy");
+            Check(!recovery.ShouldRestartStalled(259999) && recovery.ShouldRestartStalled(260000), "Restart only after 60 seconds without game ticks");
+            File.WriteAllText(recoveryControl + ".health", "200000:110000:1");
+            Check(recovery.ShouldRestartStalled(200000), "Unanswered network traffic for 90 seconds triggers recovery");
+            File.WriteAllText(recoveryControl + ".health", "200000:110001:1");
+            Check(!recovery.ShouldRestartStalled(200000), "Brief network lag does not restart");
+            File.WriteAllText(recoveryControl + ".health", "200000:0:1");
+            Check(!recovery.ShouldRestartStalled(200000), "Server response clears pending recovery");
+            File.WriteAllText(recoveryControl + ".health", "100000:0:0");
+            Check(!recovery.ShouldRestartStalled(200000), "Login and reconnect are excluded");
+            File.WriteAllText(recoveryControl + ".health", "100000:0:1");
+            recovery.UserStopped = true;
+            Check(!recovery.ShouldRestartStalled(200000), "User stop prevents automatic recovery");
+            Check(!new AccountItem { ControlFile = recoveryControl + "other" }.ShouldRestartStalled(200000), "Recovery isolated to current session");
+        } finally { File.Delete(recoveryControl + ".health"); File.Delete(recoveryControl + ".restart"); }
+        Console.WriteLine("PASS stalled-game heartbeat and network timeout recovery");
         Check(income.ReadTradeSnapshot("12000:1"), "New receipt added");
         Check(!income.ReadTradeSnapshot("12000:1") && income.TradeGold == 12000, "Repeated snapshot never doubles income");
         Check(!income.ReadTradeSnapshot("100:0") && !income.ReadTradeSnapshot("bad"), "Stale and partial telemetry ignored");

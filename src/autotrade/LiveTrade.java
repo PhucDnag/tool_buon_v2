@@ -20,7 +20,8 @@ public final class LiveTrade implements TradeEngine.Port {
     public final TradeEngine.View view=new TradeEngine.View();
     public final TradeEarnings earnings=new TradeEarnings();
     public long saleAmount=-1;
-    private long goldBeforeSale=-1;
+    // The original client displays coin as vàng; gold is the other currency.
+    private long coinsBeforeSale=-1;
     private long receiptWaitUntil;
     private final TradeConfig config;
     private final Vector events=new Vector();
@@ -123,7 +124,7 @@ public final class LiveTrade implements TradeEngine.Port {
         }
         engine.start(now);
     }
-    private void clearIntent() { receiptWaitUntil=0; sellStart=0; goldBeforeSale=-1; cargoRequestAnimal=-1; intent=0; menu=null; shop=null; cachedShop=null; hiddenShop=false; hiddenDialog=null; lastPurchase=0; purchaseSent=false; itemPurchaseSent=false; saleSent=false; saleAcknowledged=false; saleConfirmedAt=0; lastConfirmedText=null; recalled=false; summoned=false; }
+    private void clearIntent() { receiptWaitUntil=0; sellStart=0; coinsBeforeSale=-1; cargoRequestAnimal=-1; intent=0; menu=null; shop=null; cachedShop=null; hiddenShop=false; hiddenDialog=null; lastPurchase=0; purchaseSent=false; itemPurchaseSent=false; saleSent=false; saleAcknowledged=false; saleConfirmedAt=0; lastConfirmedText=null; recalled=false; summoned=false; }
     public boolean hasLostTrip() { return (recoveryMap!=null && recoveryMap.length()>0) || (lastBeastMap!=null && lastBeastMap.length()>0) || hadBeast; }
     public boolean ready() { return GameScreen.player!=null; }
     public void notifyUser(String text) { detail=text; GameCanvas.addInfoChar(text); }
@@ -231,7 +232,7 @@ public final class LiveTrade implements TradeEngine.Port {
             shop=cachedShop; shopId=cachedShopId;
         }
     }
-    public void sell() { begin(SELL,0); saleSent=false; saleAcknowledged=false; saleAmount=-1; sentAt=0; menu=null; sellStart=lastNow; saleConfirmedAt=0; lastConfirmedText=null; goldBeforeSale=(GameScreen.player!=null ? GameScreen.player.gold : -1); }
+    public void sell() { begin(SELL,0); saleSent=false; saleAcknowledged=false; saleAmount=-1; sentAt=0; menu=null; sellStart=lastNow; saleConfirmedAt=0; lastConfirmedText=null; coinsBeforeSale=(GameScreen.player!=null ? GameScreen.player.coin : -1); }
     public void recall() {
         purchaseSent=false; itemPurchaseSent=false; cachedShop=null;
         begin(RECALL,config.animal); recalled=false;
@@ -309,7 +310,9 @@ public final class LiveTrade implements TradeEngine.Port {
     public void disconnected() {
         if (!active()) return;
         view.connected=false; engine.tick(view,System.currentTimeMillis());
-        reconnecting=true; view.cargo=-1; menu=null; shop=null; cachedShop=null; hiddenDialog=null; hiddenShop=false; buyer=null; seller=null; queriedNpc=-10000; leashSecured=false;
+        clearIntent();
+        synchronized (this) { events.removeAllElements(); }
+        reconnecting=true; view.cargo=-1; view.full=false; buyer=null; seller=null; queriedNpc=-10000; leashSecured=false;
         navigation.resetConnection();
     }
     public synchronized void chat(MainObject npc) {
@@ -381,13 +384,20 @@ public final class LiveTrade implements TradeEngine.Port {
         boolean wasDead=view.dead;
         view.dead=GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4);
         if (view.dead && !wasDead) clearIntent();
-        view.hasReviveItem=hasReviveItem();
+        view.hasReviveItem=view.dead && hasReviveItem();
         view.animal=beast!=null;
-        if (view.dead) {
+        if (view.dead && !wasDead) {
             navigation.teleported=true;
             navigation.resetJourney();
         }
         if (beast!=null) {
+            if (oldBeast>=0 && beast.ID!=oldBeast && engine.state!=TradeEngine.SUMMON
+                    && engine.state!=TradeEngine.WAIT_NEW && engine.state!=TradeEngine.WAIT_REPLACE) {
+                // Cargo belongs to one animal. A different visible animal is
+                // not proof that the previous purchase/full-load still exists.
+                clearIntent(); view.cargo=-1; view.full=false; lastInfo=0;
+                engine.onAnimalNotFound(view,now);
+            }
             hadBeast=true; absentAt=0; view.hp=beast.hp; view.maxHp=beast.maxHp;
             view.distance=MainObject.getDistance(GameScreen.player.x,GameScreen.player.y,beast.x,beast.y);
             if (GameCanvas.loadmap!=null) {
@@ -458,17 +468,17 @@ public final class LiveTrade implements TradeEngine.Port {
             Navigator.stop();
         }
         Event event; for (int n=0;n<128 && (event=poll())!=null;n++) process(event,now);
-        boolean goldReceived=goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale;
+        boolean coinsReceived=coinsBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.coin>coinsBeforeSale;
         boolean emptyAnimal=beast!=null && view.cargo==0 && !view.full;
-        boolean saleFinished=saleAcknowledged || emptyAnimal || goldReceived && beast==null;
+        boolean saleFinished=saleAcknowledged || emptyAnimal || coinsReceived && beast==null;
         if (engine.state==TradeEngine.WAIT_SALE && saleSent && saleFinished && !view.dead && seller!=null && distance(seller)<=64 && view.connected && Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP)) {
             if (engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL) {
-                if (saleAmount<0 && goldBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.gold>goldBeforeSale) {
-                    saleAmount=GameScreen.player.gold-goldBeforeSale;
+                if (saleAmount<0 && coinsBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.coin>coinsBeforeSale) {
+                    saleAmount=GameScreen.player.coin-coinsBeforeSale;
                 }
                 // A success packet can precede the wallet packet. Keep the sale
                 // context briefly so the next trip cannot erase its baseline.
-                if (saleAmount<0 && goldBeforeSale>=0) {
+                if (saleAmount<0 && coinsBeforeSale>=0) {
                     saleAcknowledged=true;
                     if (receiptWaitUntil==0) receiptWaitUntil=now+2000;
                     if (now<receiptWaitUntil) return;
@@ -530,7 +540,7 @@ public final class LiveTrade implements TradeEngine.Port {
         if (view.animal && !beastHasCargo && (view.gemDrops || engine.state==TradeEngine.WAIT_NEW)) {
             MainObject nearestGem=findNearestGem();
             if (nearestGem!=null) {
-                Player.autoItem=new AutoGetItem((byte)0,(byte)0,(byte)0);
+                if (Player.autoItem==null) Player.autoItem=new AutoGetItem((byte)0,(byte)0,(byte)0);
                 int d=MainObject.getDistance(GameScreen.player.x,GameScreen.player.y,nearestGem.x,nearestGem.y);
                 if (d<=48 && now>=nextPickup) {
                     nextPickup=now+250;

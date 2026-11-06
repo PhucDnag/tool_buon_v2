@@ -280,6 +280,9 @@ public final class TradeEngine {
             awaitingStock=false; stock=null; state=REPLACE; due=now; port.stopMovement();
             replaceCooldown=now+30000;
         }
+        // Fresh inventory resolves the ambiguity; do not keep an otherwise
+        // healthy trip idle until the 30-second retry timer expires.
+        if (state==RESYNC && view.cargoRevision>syncRevision && view.cargo>=0) due=now;
         if (now<due) return;
         if (view.animal && view.full && (state==STOCK || state==BUY || state==WAIT_BUY || state==SUMMON)) {
             state=TO_SELL; stock=null; awaitingStock=false; buyAttempts=0;

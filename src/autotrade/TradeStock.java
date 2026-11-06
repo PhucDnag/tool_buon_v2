@@ -5,17 +5,18 @@ public final class TradeStock {
     public final int[] count = {-1, -1, -1};
     public boolean pearls;
 
+    private static final String[] NORMALIZE_GROUPS = {"àáạảãâầấậẩẫăằắặẳẵ", "èéẹẻẽêềếệểễ", "ìíịỉĩ", "òóọỏõôồốộổỗơờớợởỡ", "ùúụủũưừứựửữ", "ỳýỵỷỹ", "đ"};
+    private static final String NORMALIZE_REPLACEMENT = "aeiouyd";
+
     public static String normalize(String input) {
         if (input == null) return "";
         String s = input.toLowerCase();
-        String[] groups = {"àáạảãâầấậẩẫăằắặẳẵ", "èéẹẻẽêềếệểễ", "ìíịỉĩ", "òóọỏõôồốộổỗơờớợởỡ", "ùúụủũưừứựửữ", "ỳýỵỷỹ", "đ"};
-        String replacement = "aeiouyd";
         StringBuffer out = new StringBuffer();
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c >= 0x300 && c <= 0x36f) continue;
-            for (int j = 0; j < groups.length; j++) {
-                if (groups[j].indexOf(c) >= 0) { c = replacement.charAt(j); break; }
+            for (int j = 0; j < NORMALIZE_GROUPS.length; j++) {
+                if (NORMALIZE_GROUPS[j].indexOf(c) >= 0) { c = NORMALIZE_REPLACEMENT.charAt(j); break; }
             }
             if (space(c)) {
                 if (out.length()>0 && out.charAt(out.length()-1)!=' ') out.append(' ');

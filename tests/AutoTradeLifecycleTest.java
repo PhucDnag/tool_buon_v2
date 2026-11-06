@@ -77,11 +77,26 @@ public final class AutoTradeLifecycleTest {
         check(delayed.view.cargo==-1 && delayed.engine.state==TradeEngine.TO_SELL,
             "Delayed existing animal keeps unknown cargo and is not recalled as empty");
         LiveTrade live=sale(beast);
+        MainObject different=animal("Lừa vàng"); different.ID=beast.ID+1;
+        live.tick(different,4100);
+        check(live.view.cargo==-1 && !live.view.full && live.engine.state==TradeEngine.RESYNC,
+            "Unexpected animal identity cannot inherit old cargo or complete the old sale");
+        check(live.earnings.gold==0 && live.earnings.unmeasured==0,
+            "Switching animal is never evidence of sale success");
+        live=sale(beast);
+        live.serverText("Bán hàng thành công");
+        live.disconnected();
+        check(live.view.cargo==-1 && !live.view.full && live.intent==0,
+            "Disconnect invalidates full cargo and outstanding transaction context");
+        live.tick(beast,4100);
+        check(live.earnings.gold==0 && live.earnings.unmeasured==0,
+            "Queued pre-disconnect sale event cannot complete a new session transaction");
+        live=sale(beast);
         live.tick(null,4100);
         check(live.engine.state==TradeEngine.WAIT_SALE && live.earnings.gold==0 && live.earnings.unmeasured==0,
             "Disappearance at Graham alone cannot complete a sale or erase the trip");
 
-        live=sale(beast); GameScreen.player.gold+=100;
+        live=sale(beast); GameScreen.player.coin+=100;
         live.tick(beast,4100);
         check(live.engine.state==TradeEngine.WAIT_SALE,"Unrelated gold gain while cargo remains is not a sale");
         Object dialog=new Object(); GameCanvas.currentDialog=dialog;
@@ -96,11 +111,26 @@ public final class AutoTradeLifecycleTest {
         live.serverText("Bán hàng thành công"); live.tick(null,4100);
         check(live.engine.state==TradeEngine.WAIT_SALE && live.earnings.unmeasured==0,
             "Wait for wallet packet after success without a quoted price");
-        GameScreen.player.gold+=960000; live.tick(null,4200);
+        GameScreen.player.coin+=960000; live.tick(null,4200);
         check(live.engine.state==TradeEngine.TO_MARKET && live.earnings.gold==960000,
             "Delayed wallet receipt is counted before leaving seller");
         live.serverText("Bán hàng thành công"); live.tick(null,4300);
         check(live.earnings.gold==960000,"Duplicate success cannot double the receipt");
+
+        // The real client stores visible yellow money in coin, green gems in gold.
+        live=sale(beast); GameScreen.player.gold=100;
+        live.tick(null,4100);
+        check(live.engine.state==TradeEngine.WAIT_SALE && live.earnings.gold==0,
+            "Premium currency increase must not confirm a sale or count as receipts");
+        GameScreen.player.coin=480000; live.tick(null,4200);
+        check(live.earnings.gold==480000 && live.earnings.unmeasured==0,
+            "Actual coin balance confirms sale even without a priced dialog");
+        live.engine.state=TradeEngine.TO_SELL; live.view.cargo=6; live.view.full=true;
+        live.tick(beast,5000); live.tick(beast,6000);
+        live.menu(buttons("Bán hàng",null),1,7,""); live.tick(beast,7000);
+        GameScreen.player.coin=960000; live.serverText("Bán hàng thành công"); live.tick(null,7100);
+        check(live.earnings.gold==960000 && live.earnings.unmeasured==0,
+            "Second sale adds only coin gain above the previous nonzero balance");
 
         live=sale(beast);
         live.serverText("Bán hàng trên Lừa vàng nhận được 12.345 vàng"); live.tick(null,4100);

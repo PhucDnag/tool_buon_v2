@@ -3,31 +3,55 @@ import java.io.*;
 
 /** Separate mailbox keeps performance settings independent of auto commands. */
 public final class RuntimeMaintenance {
+    private static long unansweredSince;
+    private long nextHealth;
+    public static synchronized void sent() {
+        if (unansweredSince==0) unansweredSince=System.currentTimeMillis();
+    }
+    public static synchronized void received() { unansweredSince=0; }
+    private static synchronized long pendingSince(boolean armed) {
+        if (!armed) unansweredSince=0;
+        return unansweredSince;
+    }
+    public void health(long now,String control,boolean armed) {
+        long pending=pendingSince(armed);
+        if (control==null || now<nextHealth) return;
+        nextHealth=now+1000;
+        try {
+            Writer out=new FileWriter(control+".health");
+            try { out.write(now+":"+pending+":"+(armed ? "1" : "0")+"\n"); }
+            finally { out.close(); }
+        } catch (IOException ignored) {}
+    }
     private long nextPoll, nextGc, nextPaint, lastGold=-1, lastUnknown=-1;
     private int gcMinutes;
     private boolean background;
-    private long nextPeriodicGc, nextLowMemGc;
+    private long nextMemoryCheck, nextLowMemGc;
     public boolean paint(long now) {
         if (!background) return true;
         if (now<nextPaint) return false;
         nextPaint=now+1000; return true;
     }
     public void checkMemory(long now) {
-        if (nextPeriodicGc==0) nextPeriodicGc=now+180000L;
+        checkMemory(now,true);
+    }
+    public static boolean memoryPressure(long free,long total,long max) {
+        return free+Math.max(0,max-total)<16*1024*1024L;
+    }
+    public void checkMemory(long now,boolean safeToCollect) {
+        if (!safeToCollect || now<nextMemoryCheck) return;
+        nextMemoryCheck=now+1000;
         Runtime rt=Runtime.getRuntime();
-        long free=rt.freeMemory();
-        if (free<16*1024*1024L && now>=nextLowMemGc) {
-            nextLowMemGc=now+15000L;
-            nextPeriodicGc=now+180000L;
-            System.gc();
-        } else if (now>=nextPeriodicGc) {
-            nextPeriodicGc=now+180000L;
+        // A small committed heap can still grow. Do not force GC every few
+        // seconds merely because its currently unused portion is small.
+        if (memoryPressure(rt.freeMemory(),rt.totalMemory(),rt.maxMemory()) && now>=nextLowMemGc) {
+            nextLowMemGc=now+60000L;
             System.gc();
         }
     }
     public void onMapChange(long now) {
-        nextPeriodicGc=now+180000L;
-        System.gc();
+        // Let map loading finish before any optional collection.
+        nextMemoryCheck=now+5000;
     }
     public void update(long now, String control, TradeEarnings earnings, boolean safeToCollect) {
         if (control==null || now<nextPoll) return;

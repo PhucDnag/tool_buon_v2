@@ -14,7 +14,9 @@ public final class Navigator {
     public String status = "", previousMap = "";
     public boolean teleported;
     private String current = "", destination;
-    private String routeGoal, portalSnapshot;
+    private String routeGoal;
+    private String[] portalNames;
+    private int[] portalXs, portalYs;
     private int mapId = -1, cliffIndex = -1, cliffDirection;
     private long nextStep, transitionUntil;
     private long progressAt;
@@ -75,7 +77,7 @@ public final class Navigator {
             portalX=-1; portalNearAt=0; retreatUntil=0; portalAttempt=0;
             transitionUntil = now + 1500;
             progressAt = now;
-            portalSnapshot = null;
+            portalNames = null;
             graph.observed(current, mapId);
         }
         // The map name can arrive after its ID. Refresh it without treating the
@@ -83,29 +85,29 @@ public final class Navigator {
         String liveName=GameCanvas.loadmap.nameMap;
         if (liveName!=null && liveName.trim().length()>0 && !liveName.equals(current)) {
             current=liveName;
-            portalSnapshot=null;
+            portalNames=null;
             graph.observed(current,mapId);
         }
         // Map packets install names, collision data and portals in separate steps.
         if (now < transitionUntil || LoadMap.vecPointChange == null)
             return;
         int count = LoadMap.vecPointChange.size();
-        String[] names = new String[count];
-        int[] xs = new int[count], ys = new int[count];
-        StringBuffer signature = new StringBuffer();
-        for (int i = 0; i < count; i++) {
-            Point p = (Point) LoadMap.vecPointChange.elementAt(i);
-            if (p != null && p.name != null) {
-                names[i] = p.name;
-                xs[i] = p.x;
-                ys[i] = p.y;
-                signature.append(p.name).append(':').append(p.x).append(':').append(p.y).append('\n');
-            }
+        boolean exitsChanged=portalNames==null || portalNames.length!=count;
+        if (!exitsChanged) for (int i=0;i<count;i++) {
+            Point p=(Point)LoadMap.vecPointChange.elementAt(i);
+            String name=p==null ? null : p.name;
+            if (name==null ? portalNames[i]!=null : !name.equals(portalNames[i])
+                    || p.x!=portalXs[i] || p.y!=portalYs[i]) { exitsChanged=true; break; }
         }
-        String snapshot = signature.toString();
-        if (!snapshot.equals(portalSnapshot)) {
-            graph.replaceExits(current, names, xs, ys);
-            portalSnapshot = snapshot;
+        if (exitsChanged) {
+            String[] names=new String[count];
+            int[] xs=new int[count],ys=new int[count];
+            for (int i=0;i<count;i++) {
+                Point p=(Point)LoadMap.vecPointChange.elementAt(i);
+                if (p!=null && p.name!=null) { names[i]=p.name; xs[i]=p.x; ys[i]=p.y; }
+            }
+            graph.replaceExits(current,names,xs,ys);
+            portalNames=names; portalXs=xs; portalYs=ys;
             try {
                 ByteArrayOutputStream b = new ByteArrayOutputStream();
                 graph.write(new DataOutputStream(b));

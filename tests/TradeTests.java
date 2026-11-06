@@ -84,6 +84,11 @@ public final class TradeTests {
         check(retryPort.sells==3,"Third attempt allowed");
         retryEngine.tick(retryView,71000);
         check(retryEngine.state==TradeEngine.RESYNC && retryPort.sells==3,"Pause mutations after bounded retries until fresh synchronization");
+        retryEngine.tick(retryView,71100);
+        check(retryEngine.state==TradeEngine.RESYNC && retryPort.sells==3,"Old cargo cannot bypass synchronization wait");
+        retryView.cargoRevision++; retryEngine.tick(retryView,71200);
+        check(retryEngine.state==TradeEngine.TO_SELL && retryPort.sells==3,
+            "Fresh cargo resumes promptly without waiting thirty seconds or immediately duplicating sale");
         for (int cargo=0;cargo<2;cargo++) {
             TradeConfig lastConfig=new TradeConfig(); lastConfig.market=2;
             Port lastPort=new Port(); TradeEngine.View lastView=new TradeEngine.View(); lastView.market=2;

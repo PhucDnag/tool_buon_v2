@@ -290,6 +290,21 @@ namespace PhucHsoManager
             return delta != 0 || missing != 0;
         }
 
+        public bool ShouldRestartStalled(long now)
+        {
+            if (UserStopped || string.IsNullOrEmpty(ControlFile)) return false;
+            try {
+                string path = ControlFile + ".health";
+                if (!File.Exists(path)) return false;
+                string[] parts = File.ReadAllText(path).Trim().Split(':');
+                long tick, pending;
+                if (parts.Length != 3 || parts[2] != "1" || !long.TryParse(parts[0], out tick)
+                    || !long.TryParse(parts[1], out pending) || tick <= 0 || tick > now
+                    || pending < 0 || pending > tick) return false;
+                return now - tick >= 60000 || pending > 0 && now - pending >= 90000;
+            } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
+        }
+
         [ScriptIgnore]
         public Process Process { get; set; }
 
@@ -1337,6 +1352,13 @@ namespace PhucHsoManager
             foreach (var acc in accounts)
             {
                 statisticsChanged |= ReadStatistics(acc);
+                if (acc.IsRunning && acc.ShouldRestartStalled((long)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalMilliseconds)) {
+                    if (StopAccount(acc)) {
+                        LaunchProcess(acc);
+                        lblStatus.Text = "Đã mở lại tài khoản do game ngừng cập nhật hoặc không phản hồi: " + acc.DisplayName;
+                    }
+                    continue;
+                }
                 if (acc.IsRunning && !string.IsNullOrEmpty(acc.ControlFile)) {
                     try {
                         string proxyFile = acc.ControlFile + ".proxy";

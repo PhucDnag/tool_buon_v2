@@ -33,6 +33,12 @@ public final class PatchClient implements Opcodes {
                         }
                     }
                     public void visitInsn(int opcode) {
+                        if (opcode==ARETURN && owner.equals("CLib/Session_ME$MessageCollector") && name.equals("readMessage")) {
+                            super.visitInsn(DUP);
+                            Label absent=new Label(); super.visitJumpInsn(IFNULL,absent);
+                            super.visitMethodInsn(INVOKESTATIC,"autotrade/RuntimeMaintenance","received","()V",false);
+                            super.visitLabel(absent); hits.add("healthReceive");
+                        }
                         if (opcode==RETURN) {
                             if (owner.equals("netcommand/global/ReadMessenge") && name.equals("npcInfo")) call("finishTradeShop","()V");
                             if (owner.equals("Main/GameCanvas") && name.equals("update") && desc.equals("()V")) call("tick","()V");
@@ -88,6 +94,8 @@ public final class PatchClient implements Opcodes {
                         }
                         super.visitCode();
                         if (owner.equals("CLib/Session_ME") && name.equals("doSendMessage")) {
+                            super.visitMethodInsn(INVOKESTATIC,"autotrade/RuntimeMaintenance","sent","()V",false);
+                            hits.add("healthSend");
                             super.visitVarInsn(ALOAD,1);
                             super.visitFieldInsn(GETFIELD,"net/Message","command","B");
                             super.visitMethodInsn(INVOKESTATIC,"autotrade/ConnectionTrace","packet","(I)V",false);
@@ -186,7 +194,7 @@ public final class PatchClient implements Opcodes {
             }
             addFiles(out,new File(args[1]),new File(args[1]));
         } finally { out.close(); input.close(); }
-        String[] required={"traceSend","traceConnect","traceNetworkError","tick","appendMenu","paint","disconnected","serverMenu","displayName","npcChat","npcChat/chat_npc","npcChat/npcInfo","npcChat/chatPopup","stockRequested","serverDialog","serverDialogOne","serverNamedShop","serverText","pointerClick","keyPress","hideTradeShop","hideTradeMenu"};
+        String[] required={"healthReceive","healthSend","traceSend","traceConnect","traceNetworkError","tick","appendMenu","paint","disconnected","serverMenu","displayName","npcChat","npcChat/chat_npc","npcChat/npcInfo","npcChat/chatPopup","stockRequested","serverDialog","serverDialogOne","serverNamedShop","serverText","pointerClick","keyPress","hideTradeShop","hideTradeMenu"};
         for (String hook:required) if (!hits.contains(hook)) throw new IllegalStateException("Missing hook: "+hook);
         for (String hook:new String[]{"managerLogin/setScreen","managerLogin/loadUser_Pass","prepareManagerLogin","shouldPaint","paintLowDetail","hideEffects"})
             if (!hits.contains(hook)) throw new IllegalStateException("Missing hook: "+hook);

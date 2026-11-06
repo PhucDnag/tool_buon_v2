@@ -41,6 +41,7 @@ public final class ClientMod {
     private static final ManagerControl managerControl=new ManagerControl();
     private static final RuntimeMaintenance maintenance=new RuntimeMaintenance();
     private static long lastNetworkActivity;
+    private static long nextErrorLog;
     public static boolean shouldPaint() { return maintenance.paint(System.currentTimeMillis()); }
     private static void pollManager(long now) {
         int command=managerControl.poll(System.getProperty("phuc.control"),now);
@@ -373,18 +374,11 @@ public final class ClientMod {
         maintenance.update(now,System.getProperty("phuc.control"),live.earnings,
                 !Session_ME.gI().connecting && GameCanvas.currentDialog==null && !reconnecting
                 && (!live.active() || live.engine.state==TradeEngine.PAUSED || live.engine.state==TradeEngine.STOCK));
-        maintenance.checkMemory(now);
-        if (live.active() && Session_ME.gI().isConnected() && GameCanvas.currentScreen==GameCanvas.game && !reconnecting) {
-            if (lastNetworkActivity==0) lastNetworkActivity=now;
-            if (now-lastNetworkActivity>90000L) {
-                ConnectionTrace.event("STALL_TIMEOUT");
-                lastNetworkActivity=now;
-                try { Session_ME.gI().close(); } catch (Throwable ignored) {}
-                disconnected();
-            }
-        } else {
-            lastNetworkActivity=now;
-        }
+        maintenance.checkMemory(now,!Session_ME.gI().connecting && !reconnecting
+                && GameCanvas.currentDialog==null && (!live.active()
+                || live.engine.state==TradeEngine.PAUSED || live.engine.state==TradeEngine.STOCK));
+        maintenance.health(now,System.getProperty("phuc.control"),
+                Session_ME.gI().isConnected() && GameCanvas.currentScreen==GameCanvas.game && !reconnecting);
         try {
             pollManager(now);
             if (GameCanvas.currentScreen==GameCanvas.selectChar) {
@@ -509,7 +503,7 @@ public final class ClientMod {
             int dot = name.lastIndexOf('.');
             if (dot >= 0) name = name.substring(dot + 1);
             status = "Lỗi " + name + (e.getMessage() != null ? (": " + e.getMessage()) : "");
-            e.printStackTrace();
+            if (now>=nextErrorLog) { nextErrorLog=now+5000; e.printStackTrace(); }
         }
     }
     private static void walk(int x,int y) {

@@ -224,7 +224,7 @@ public final class TradeConfirmationTest {
         live.menu(options("Bán hàng"),2,77,""); live.tick(replacement,14000);
         live.menu(options("Bán tất cả hàng"),3,77,""); live.tick(replacement,15000);
         check(net.lastNpc==77 && net.lastIndex==0,"Continue sale submenu even after initial sell selection");
-        GameScreen.player.gold+=12345;
+        GameScreen.player.coin+=12345;
         graham.strChatPopup="Bán hàng thành công"; live.chat(graham); live.tick(replacement,16000);
         check(live.engine.state==TradeEngine.WAIT_RECALL && live.view.cargo==0,
             "Graham acknowledgement completes sale and cancels the remaining empty animal");
@@ -784,7 +784,7 @@ public final class TradeConfirmationTest {
         grahamNpc.x=200; grahamNpc.y=200;
         GameScreen.Vecplayers.removeAllElements(); GameScreen.Vecplayers.addElement(grahamNpc);
         beast=new MainObject(); beast.ID=8526; beast.name="Bò vàng"; beast.x=200; beast.y=200; beast.maxHp=400000; beast.hp=212000;
-        GameScreen.player.x=200; GameScreen.player.y=200; GameScreen.player.gold=50000;
+        GameScreen.player.x=200; GameScreen.player.y=200; GameScreen.player.coin=50000;
         live.view.cargo=24; live.view.full=true;
         live.tick(beast,160000); live.tick(beast,161000);
         check(live.engine.state==TradeEngine.WAIT_SALE,"Enter WAIT_SALE at Graham attempt 1");
@@ -811,7 +811,7 @@ public final class TradeConfirmationTest {
         live.tick(beast,168000);
         check(ok2.calls==1,"Confirmed second sale dialog");
         // Server awards gold to player and consumes trade beast
-        GameScreen.player.gold=530000;
+        GameScreen.player.coin=530000;
         live.tick(null,169000);
         check(live.engine.state==TradeEngine.TO_MARKET,"Gold increase confirms sale and loops back to market");
         check(live.earnings.gold==480000,"Earnings recorded gold gained from sale");
