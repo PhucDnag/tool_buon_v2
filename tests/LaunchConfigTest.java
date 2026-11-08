@@ -42,6 +42,10 @@ public final class LaunchConfigTest {
         check(c.gem==2,"Invalid field cannot suppress remaining configuration");
         check(LaunchConfig.serverIndex("chien than",null)==-1,"Wait for server list to load");
         check(LaunchConfig.serverIndex("chien than",new String[][]{{"Rồng"},{"Chiến Thần"}})==1,"Resolve requested server after list loads");
+        check(LaunchConfig.serverIndex("Bạch Hổ",new String[][]{{"Bạch Hổ (New)","fixture"}})==0,"New server marker must not block automatic proxy login");
+        check(LaunchConfig.serverIndex("Thiên Hà",new String[][]{{"Thiên Hà (New)"}})==0,"Bundled server label matches manager label");
+        check(LaunchConfig.serverIndex("Bạch Hổ",new String[][]{{"Bạch Hổ 2"}})==-1,"Never choose a different server by prefix");
+        check(LaunchConfig.serverIndex("Bạch Hổ",new String[][]{{"Chiến Thần"}})==-1,"Missing server stays explicit instead of logging in elsewhere");
         System.out.println("PASS launch pipe, emulator property bridge, config and server selection");
     }
 }

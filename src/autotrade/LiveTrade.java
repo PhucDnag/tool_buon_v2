@@ -33,6 +33,7 @@ public final class LiveTrade implements TradeEngine.Port {
     private long menuAt, nextAction, sentAt, absentAt, lastInfo, lastNow, sellStart;
     private boolean summoned, purchaseSent, saleSent, saleAcknowledged, hadBeast, recalled, reconnecting;
     private boolean itemPurchaseSent, leashSecured;
+    private boolean itemRevivePending;
     public Object activeDialog;
     public String activeDialogText;
     public mVector activeDialogChoices;
@@ -257,6 +258,25 @@ public final class LiveTrade implements TradeEngine.Port {
         }
     }
     public void followAnimal() { if (beast!=null) navigation.walk(beast.x,beast.y,2,null,lastNow); }
+    // Fail closed: a generic revive caption is not proof that revival is item-only.
+    public static boolean isItemOnlyRevive(String text) {
+        String s=TradeStock.normalize(text);
+        return s.indexOf("ngoc")<0 && s.indexOf("gem")<0 && s.indexOf("ruby")<0
+                && s.indexOf("kim cuong")<0 && s.indexOf("vang")<0
+                && (s.indexOf("vat pham hoi sinh")>=0 || s.indexOf("thanh gia")>=0
+                    || s.indexOf("bua hoi sinh")>=0 || s.indexOf("thuoc hoi sinh")>=0
+                    || s.indexOf("binh hoi sinh")>=0);
+    }
+    private boolean canConfirmRevive(String text) {
+        String s=TradeStock.normalize(text);
+        // The server states the gem charge in the confirmation. Never approve it.
+        return itemRevivePending && hasReviveItem() && s.indexOf("ngoc")<0
+                && s.indexOf("gem")<0 && s.indexOf("ruby")<0 && s.indexOf("kim cuong")<0
+                && (s.indexOf("hoi sinh")>=0 || s.indexOf("thanh gia")>=0 || s.indexOf("revive")>=0);
+    }
+    private boolean canUseReviveItem(String text) {
+        return itemRevivePending && hasReviveItem() && isItemOnlyRevive(text);
+    }
     public boolean hasReviveItem() { return findReviveItem() != null; }
     public static Item findReviveItem() {
         if (Item.VecInvetoryPlayer == null) return null;
@@ -268,7 +288,7 @@ public final class LiveTrade implements TradeEngine.Port {
     }
     public static boolean isReviveItem(Item item) {
         if (item == null || item.itemName == null) return false;
-        if (item.numPotion <= 0 && item.ItemCatagory == 4) return false;
+        if (item.numPotion <= 0) return false;
         if (item.ItemCatagory != 0 && item.ItemCatagory != 4) return false;
         String name = TradeStock.normalize(item.itemName);
         return name.indexOf("thanh gia") >= 0
@@ -281,10 +301,13 @@ public final class LiveTrade implements TradeEngine.Port {
     }
     public void resurrect() {
         if (GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4)) {
+            if (!hasReviveItem()) { resurrectVillage(); return; }
+            itemRevivePending=true;
             GlobalService.gI().gohome((byte)1);
         }
     }
     public void resurrectVillage() {
+        itemRevivePending=false;
         if (GameScreen.player!=null && (GameScreen.player.hp<=0 || GameScreen.player.Action==4)) {
             GlobalService.gI().gohome((byte)0);
             if (GameCanvas.currentDialog!=null) GameCanvas.end_Dialog();
@@ -508,6 +531,7 @@ public final class LiveTrade implements TradeEngine.Port {
             checkAndConfirmSaleDialog(activeDialog, activeDialogText, activeDialogChoices, now);
         }
         if (!view.dead) {
+            itemRevivePending=false;
             if (GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu && isReviveMenu(GameCanvas.menu2.menuItems)) {
                 GameCanvas.menu2.isShowMenu=false;
             }
@@ -518,7 +542,7 @@ public final class LiveTrade implements TradeEngine.Port {
                 if (obj instanceof iCommand) {
                     iCommand cmd=(iCommand)obj;
                     String cap=TradeStock.normalize(cmd.caption!=null ? cmd.caption : "");
-                    if (cap.indexOf("vat pham hoi sinh")>=0 || cap.indexOf("thanh gia")>=0 || (cap.indexOf("hoi sinh")>=0 && cap.indexOf("ngoc")<0)) {
+                    if (canUseReviveItem(cap)) {
                         GameCanvas.menu2.menuSelectedItem=i;
                         try { GameCanvas.menu2.commandPointer(2,0); } catch (Throwable ignored) {}
                         GameCanvas.menu2.isShowMenu=false;
@@ -528,6 +552,7 @@ public final class LiveTrade implements TradeEngine.Port {
                 }
             }
         }
+        if (view.dead && GameCanvas.menu2!=null && GameCanvas.menu2.isShowMenu) resurrectVillage();
         if (!active()) { clearIntent(); return; }
         if (engine.state==TradeEngine.PAUSED || view.dead) return;
         if ((engine.state==TradeEngine.WAIT_NEW || engine.state==TradeEngine.RESYNC) && beast!=null && now-cargoRequestAt>=3000) {
@@ -698,7 +723,7 @@ public final class LiveTrade implements TradeEngine.Port {
                     if (obj instanceof iCommand) {
                         iCommand cmd=(iCommand)obj;
                         String cap=TradeStock.normalize(cmd.caption!=null ? cmd.caption : "");
-                        if (cap.indexOf("vat pham hoi sinh")>=0 || cap.indexOf("thanh gia")>=0 || (cap.indexOf("hoi sinh")>=0 && cap.indexOf("ngoc")<0)) {
+                        if (canUseReviveItem(cap)) {
                             GlobalService.gI().Dynamic_Menu((short)e.id,(byte)e.menu,(byte)i);
                             if (GameCanvas.menu2!=null) {
                                 GameCanvas.menu2.menuSelectedItem=i;
@@ -710,6 +735,7 @@ public final class LiveTrade implements TradeEngine.Port {
                     }
                 }
             }
+            if (view.dead) { resurrectVillage(); return; }
             if (e.id==-56 && isBuying() && GameScreen.ObjFocus!=beast) { if (GameCanvas.menu2!=null) GameCanvas.menu2.isShowMenu=false; return; }
             if (e.id==-56 && cargoRequestAnimal>=0 && e.map==cargoRequestMap && e.choices!=null) {
                 for (int i=0;i<e.choices.size();i++) {
@@ -735,11 +761,11 @@ public final class LiveTrade implements TradeEngine.Port {
             }
         }
         if (view.dead && e.type==3 && e.dialog==GameCanvas.currentDialog && e.choices!=null) {
-            String text=TradeStock.normalize(e.text!=null ? e.text : "");
-            if (text.indexOf("hoi sinh")>=0 || text.indexOf("thanh gia")>=0 || text.indexOf("revive")>=0) {
+            if (!canConfirmRevive(e.text)) { resurrectVillage(); return; }
+            if (canConfirmRevive(e.text)) {
                 for (int i=0;i<e.choices.size();i++) {
                     iCommand c=(iCommand)e.choices.elementAt(i);
-                    if (c!=null && TradeSignals.isConfirmButton(c.caption)) {
+                    if (c!=null && TradeSignals.isConfirmButton(c.caption) && canConfirmRevive(e.text+" "+c.caption)) {
                         c.perform();
                         if (e.dialog==GameCanvas.currentDialog) GameCanvas.end_Dialog();
                         break;

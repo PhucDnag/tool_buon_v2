@@ -688,6 +688,43 @@ public final class TradeConfirmationTest {
         live.resurrectVillage();
         check(net.lastGohomeType==0,"Return to village only when out of revive items");
 
+        // Reject paid, mixed and ambiguous revival confirmations, even with an item.
+        String[] unsafeRevives={"Hồi sinh với 2 Ngọc?", "Dùng vật phẩm hồi sinh hoặc 2 Ngọc?", "Hồi sinh mất 5 ngọc", "Revive for 2 gems?"};
+        Item.VecInvetoryPlayer.addElement(reviveItem);
+        for (int r=0;r<unsafeRevives.length;r++) {
+            live.resurrect();
+            Object paidDialog=new Object(); GameCanvas.currentDialog=paidDialog;
+            mVector paidButtons=options("Ok");
+            iCommand paidOk=(iCommand)paidButtons.elementAt(0);
+            live.dialog(paidDialog,unsafeRevives[r],paidButtons);
+            live.tick(beast,95200+r);
+            check(paidOk.calls==0,"Never confirm paid or ambiguous revival: "+unsafeRevives[r]);
+            check(net.lastGohomeType==0,"Unsafe revival falls back to village");
+        }
+        live.resurrect();
+        Object itemDialog=new Object(); GameCanvas.currentDialog=itemDialog;
+        mVector itemButtons=options("Ok");
+        iCommand itemOk=(iCommand)itemButtons.elementAt(0);
+        live.dialog(itemDialog,"Bạn có muốn hồi sinh tại chỗ?",itemButtons);
+        live.tick(beast,95210);
+        check(itemOk.calls==1,"Revival confirmation without gems works when an item request is pending");
+        live.resurrect();
+        int beforeUnsafeMenu=net.menuCalls;
+        live.menu(options("Dùng vật phẩm hồi sinh hoặc 2 Ngọc"),1,0,"Menu");
+        live.tick(beast,95220);
+        check(net.menuCalls==beforeUnsafeMenu && net.lastGohomeType==0,"Mixed item/currency menu rejected");
+        live.resurrect();
+        GameCanvas.menu2.menuItems=options("Hồi sinh tại chỗ");
+        GameCanvas.menu2.isShowMenu=true;
+        live.tick(beast,95230);
+        check(net.lastGohomeType==0 && !GameCanvas.menu2.isShowMenu,"Ambiguous visible menu falls back to village");
+        Item.VecInvetoryPlayer.removeAllElements();
+        live.resurrect();
+        check(net.lastGohomeType==0,"Direct spot request without item also returns to village");
+        reviveItem.numPotion=0; Item.VecInvetoryPlayer.addElement(reviveItem);
+        check(!live.hasReviveItem(),"Zero-count item cannot authorize spot revival");
+        Item.VecInvetoryPlayer.removeAllElements();
+
         // --- Regression test 9: Unrelated gem drops ignored when animal already has cargo ---
         live=start();
         live.engine.state=TradeEngine.TO_SELL;

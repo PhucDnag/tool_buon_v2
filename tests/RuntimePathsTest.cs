@@ -74,9 +74,11 @@ public class RuntimePathsTest : MarshalByRefObject
         Check(income.ReadTradeSnapshot("15000:2") && income.TradeGold == 15000 && income.UnmeasuredSales == 2, "Incremental totals");
         income.SessionGold = income.SessionUnmeasured = 0;
         Check(income.ReadTradeSnapshot("50:0") && income.TradeGold == 15050, "New game session adds to saved totals");
-        var area = new System.Drawing.Rectangle(-1920, 40, 1920, 1040);
+        var area = new System.Drawing.Rectangle(-1920, 40, 1920, 1664);
         for (int count = 1; count <= 20; count++) {
-            var boxes = WindowLayout.Arrange(area, count);
+            var sizes = new System.Drawing.Size[count];
+            for (int i = 0; i < count; i++) sizes[i] = new System.Drawing.Size(310, 408);
+            var boxes = WindowLayout.Arrange(area, sizes);
             Check(boxes.Length == count, "Every game has a slot");
             for (int i = 0; i < count; i++) {
                 Check(area.Contains(boxes[i]), "Layout stays within monitor working area");
@@ -209,6 +211,7 @@ public class RuntimePathsTest : MarshalByRefObject
                 } finally { rows[1].Process = null; rows[1].ControlFile = null; if (File.Exists(mailbox)) File.Delete(mailbox); }
                 using (var windowA = new System.Windows.Forms.Form())
                 using (var windowB = new System.Windows.Forms.Form()) {
+                    windowA.Text = "Fixture game A"; windowB.Text = "Fixture game B";
                     windowA.Show(); windowB.Show();
                     rows[1].Process = System.Diagnostics.Process.GetCurrentProcess();
                     rows[0].WindowHandle = windowA.Handle; rows[1].WindowHandle = windowB.Handle;
@@ -216,9 +219,36 @@ public class RuntimePathsTest : MarshalByRefObject
                     visibility.Invoke(form, new object[] { false });
                     System.Windows.Forms.Application.DoEvents();
                     Check(!windowA.Visible && !windowB.Visible && rows[0].Background && rows[1].Background, "Hide all keeps both processes alive in background mode");
+                    var native = typeof(MainForm).Assembly.GetType("PhucHsoManager.Win32");
+                    using (var toolkit = new System.Windows.Forms.Form { Text = "theAwtToolkitWindow" }) {
+                        var score = native.GetMethod("MainWindowScore");
+                        Check((int)score.Invoke(null, new object[] { toolkit.Handle, rows[0].Process.Id }) == -1,
+                            "AWT toolkit window is rejected even if its PID matches the game");
+                    }
+                    var discover = native.GetMethod("FindMainWindow", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    IntPtr hidden = (IntPtr)discover.Invoke(null, new object[] { System.Diagnostics.Process.GetCurrentProcess().Id });
+                    Check(hidden == windowA.Handle || hidden == windowB.Handle, "Hidden game frames remain discoverable without cached handles");
                     visibility.Invoke(form, new object[] { true });
                     System.Windows.Forms.Application.DoEvents();
                     Check(windowA.Visible && windowB.Visible && !rows[0].Background && !rows[1].Background, "Restore finds previously hidden windows");
+                    var originalSizes = new[] { windowB.Size, windowA.Size };
+                    typeof(MainForm).GetMethod("TileWindows", flags).Invoke(form, null);
+                    System.Windows.Forms.Application.DoEvents();
+                    DateTime tileStart = DateTime.UtcNow;
+                    DateTime tileDeadline = tileStart.AddSeconds(6);
+                    bool repacked = false;
+                    while (!label.Text.StartsWith("Đã xếp") && DateTime.UtcNow < tileDeadline) {
+                        System.Windows.Forms.Application.DoEvents(); System.Threading.Thread.Sleep(25);
+                        if (!repacked && (DateTime.UtcNow - tileStart).TotalMilliseconds >= 550) {
+                            windowB.Location = new System.Drawing.Point(windowB.Left + 80, windowB.Top + 120);
+                            repacked = true;
+                        }
+                    }
+                    Check(repacked, "Simulate emulator resetting position after initial layout");
+                    Check(label.Text.Contains("2/2"), "Tile verifies both window rectangles");
+                    var expected = WindowLayout.Arrange(System.Windows.Forms.Screen.FromControl(form).WorkingArea, originalSizes);
+                    Check(windowB.Bounds == expected[0] && windowA.Bounds == expected[1],
+                        "Actual windows align left to right in displayed row order, not backing list order");
                     rows[0].WindowHandle = rows[1].WindowHandle = IntPtr.Zero;
                     rows[1].Process = null;
                 }
@@ -230,6 +260,28 @@ public class RuntimePathsTest : MarshalByRefObject
                 }
                 ((System.Windows.Forms.Timer)typeof(MainForm).GetField("updateTimer", flags).GetValue(form)).Stop();
                 rows[0].Process = null;
+                var fixtureInfo = new System.Diagnostics.ProcessStartInfo {
+                    FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
+                    Arguments = "-NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 30\"",
+                    UseShellExecute = false, CreateNoWindow = true, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
+                };
+                using (var fixture = System.Diagnostics.Process.Start(fixtureInfo))
+                using (var observer = System.Diagnostics.Process.GetProcessById(fixture.Id)) {
+                    try {
+                        rows[1].Process = fixture;
+                        var stop = typeof(MainForm).GetMethod("StopSelected", flags);
+                        grid.CurrentCell = grid.Rows[1].Cells[3]; // stopped account-a
+                        stop.Invoke(form, null);
+                        Check(!observer.HasExited && label.Text.Contains("đã dừng"), "Stopping a stopped row explains selection and leaves other game alive");
+                        grid.CurrentCell = grid.Rows[0].Cells[3]; // running account-b
+                        stop.Invoke(form, null);
+                        Check(observer.WaitForExit(3000) && rows[1].Process == null && rows[1].UserStopped,
+                            "Stop selected actually terminates its own fixture process and disables restart");
+                    } finally {
+                        if (!observer.HasExited) { observer.Kill(); observer.WaitForExit(3000); }
+                        rows[1].Process = null;
+                    }
+                }
             }
             Console.WriteLine("PASS bound row selection and PID display: 4 assertions");
         } finally {

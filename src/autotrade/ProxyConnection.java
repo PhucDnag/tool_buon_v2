@@ -5,6 +5,8 @@ import java.net.*;
 
 /** SOCKS5 CONNECT with explicit authentication and no direct fallback. */
 public final class ProxyConnection {
+    private static boolean started;
+    private static String startupState;
     private static String state="Chưa kết nối";
     private static String setting(String key,String fallback) {
         String value=System.getProperty(key); return value==null ? fallback : value;
@@ -22,7 +24,12 @@ public final class ProxyConnection {
             try { out.write(value); } finally { out.close(); }
         } catch (IOException ignored) {}
     }
+    public static synchronized void startupStatus(String value) {
+        if (!enabled() || started || value.equals(startupState)) return;
+        startupState=value; status(value);
+    }
     public static Socket connect(String target,int port) throws IOException {
+        synchronized (ProxyConnection.class) { started=true; }
         status("Đang kết nối SOCKS5");
         Socket socket=new Socket(Proxy.NO_PROXY);
         try {

@@ -413,8 +413,7 @@ namespace PhucHsoManager
         public static List<IntPtr> VisibleWindows(int pid) {
             var result = new List<IntPtr>();
             EnumWindows(delegate(IntPtr h, IntPtr unused) {
-                uint owner; GetWindowThreadProcessId(h, out owner);
-                if (owner == pid && IsWindowVisible(h)) result.Add(h);
+                if (IsWindowVisible(h) && MainWindowScore(h, pid) >= 0) result.Add(h);
                 return true;
             }, IntPtr.Zero);
             return result;
@@ -422,25 +421,49 @@ namespace PhucHsoManager
 
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder name, int count);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindow(IntPtr hWnd, uint command);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int width, int height, uint flags);
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WindowRect { public int Left, Top, Right, Bottom; }
+        [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(IntPtr hWnd, out WindowRect rect);
+        public static bool AtPosition(IntPtr handle, Point target) {
+            WindowRect rect;
+            return GetWindowRect(handle, out rect) && Math.Abs(rect.Left - target.X) <= 2
+                && Math.Abs(rect.Top - target.Y) <= 2;
+        }
+
+
+        public static int MainWindowScore(IntPtr handle, int pid)
+        {
+            uint owner;
+            GetWindowThreadProcessId(handle, out owner);
+            if (owner != pid || GetWindow(handle, 4) != IntPtr.Zero) return -1;
+            var title = new StringBuilder(256);
+            var windowClass = new StringBuilder(256);
+            GetWindowText(handle, title, title.Capacity);
+            GetClassName(handle, windowClass, windowClass.Capacity);
+            string name = title.ToString(), kind = windowClass.ToString();
+            bool awtFrame = kind == "SunAwtFrame";
+            if (name.Length == 0 || name.Contains("Default IME") || name.Contains("MSCTFIME")
+                || name.Equals("theAwtToolkitWindow", StringComparison.OrdinalIgnoreCase)
+                || kind.IndexOf("IME", StringComparison.OrdinalIgnoreCase) >= 0
+                || (kind.StartsWith("SunAwt", StringComparison.OrdinalIgnoreCase) && !awtFrame)) return -1;
+            return (awtFrame ? 10 : 0) + (IsWindowVisible(handle) ? 1 : 0);
+        }
 
         public static IntPtr FindMainWindow(int pid)
         {
             IntPtr found = IntPtr.Zero;
+            int bestScore = -1;
             EnumWindows(delegate (IntPtr hWnd, IntPtr lParam)
             {
-                uint p;
-                GetWindowThreadProcessId(hWnd, out p);
-                if (p == pid && IsWindowVisible(hWnd))
-                {
-                    StringBuilder sb = new StringBuilder(256);
-                    GetWindowText(hWnd, sb, 256);
-                    string t = sb.ToString();
-                    if (t.Length > 0 && !t.Contains("Default IME") && !t.Contains("MSCTFIME"))
-                    {
-                        found = hWnd;
-                        return false;
-                    }
-                }
+                int score = MainWindowScore(hWnd, pid);
+                if (score > bestScore) { bestScore = score; found = hWnd; }
                 return true;
             }, IntPtr.Zero);
             return found;
@@ -910,15 +933,22 @@ namespace PhucHsoManager
 
     public static class WindowLayout
     {
-        public static Rectangle[] Arrange(Rectangle area, int count)
+        public static Rectangle[] Arrange(Rectangle area, IList<Size> sizes)
         {
-            if (count <= 0) return new Rectangle[0];
-            int cols = Math.Min(count, Math.Max(1, area.Width / 310));
-            int rows = (count + cols - 1) / cols;
-            int width = Math.Min(310, area.Width / cols), height = Math.Min(410, area.Height / rows);
-            var result = new Rectangle[count];
-            int left = area.Left + (area.Width - cols * width) / 2;
-            for (int i = 0; i < count; i++) result[i] = new Rectangle(left + (i % cols) * width, area.Top + (i / cols) * height, width, height);
+            const int gap = 8;
+            var result = new Rectangle[sizes.Count];
+            int x = area.Left, y = area.Top, rowHeight = 0;
+            for (int i = 0; i < sizes.Count; i++) {
+                Size size = sizes[i];
+                if (x != area.Left && x + size.Width > area.Right) {
+                    x = area.Left;
+                    y += rowHeight + gap;
+                    rowHeight = 0;
+                }
+                result[i] = new Rectangle(new Point(x, y), size);
+                x += size.Width + gap;
+                rowHeight = Math.Max(rowHeight, size.Height);
+            }
             return result;
         }
     }
@@ -930,6 +960,7 @@ namespace PhucHsoManager
         private DataGridView dgvAccounts;
         private ToolStripStatusLabel lblStatus, lblSummary;
         private System.Windows.Forms.Timer updateTimer;
+        private System.Windows.Forms.Timer tileTimer;
         private bool isBatchLaunching = false;
         private System.Windows.Forms.Timer launchTimer;
         private readonly Queue<AccountItem> pendingLaunches = new Queue<AccountItem>();
@@ -948,6 +979,7 @@ namespace PhucHsoManager
             settings = AppSettings.Load();
             if (!string.IsNullOrEmpty(javaOverride)) settings.JavaPath = javaOverride;
             InitializeComponent();
+            Disposed += delegate { if (tileTimer != null) { tileTimer.Stop(); tileTimer.Dispose(); tileTimer = null; } };
             LoadAccounts();
             StartTimer();
         }
@@ -1032,7 +1064,7 @@ namespace PhucHsoManager
             Button btnLaunchSelected = CreateButton("Mở game (F5)", Color.FromArgb(21, 101, 192), Color.White);
             btnLaunchSelected.Click += delegate { LaunchSelected(); };
 
-            Button btnStopSelected = CreateButton("Dừng game", Color.FromArgb(230, 81, 0), Color.White);
+            Button btnStopSelected = CreateButton("Dừng game dòng chọn", Color.FromArgb(230, 81, 0), Color.White);
             btnStopSelected.Click += delegate { StopSelected(); };
 
             Button btnAutoOn = CreateButton("Bật auto", Color.FromArgb(46, 125, 50), Color.White);
@@ -1712,7 +1744,7 @@ namespace PhucHsoManager
 
                 string password = acc.ReadPassword();
                 string proxyPassword = acc.ProxyEnabled ? acc.ReadProxyPassword() : "";
-                acc.ProxyStatus = acc.ProxyEnabled ? "Chờ kết nối game qua proxy" : "Tắt";
+                acc.ProxyStatus = acc.ProxyEnabled ? "Chờ game khởi động và tự đăng nhập" : "Tắt";
                 string launcher = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools", "manager-launcher.jar");
                 if (!File.Exists(launcher)) throw new FileNotFoundException("Thiếu tools/manager-launcher.jar. Hãy build lại bộ tool.");
 
@@ -1799,7 +1831,13 @@ namespace PhucHsoManager
         private void StopSelected()
         {
             AccountItem acc = GetSelectedAccount();
-            if (acc == null) return;
+            if (acc == null) { lblStatus.Text = "Chọn dòng tài khoản cần dừng game."; return; }
+            if (!acc.IsRunning) {
+                acc.UserStopped = true;
+                acc.NextRestartAt = DateTime.MinValue;
+                lblStatus.Text = "Tài khoản đang chọn đã dừng: " + acc.DisplayName + ". Chọn dòng có trạng thái Đang chạy, hoặc dùng Tắt tất cả game.";
+                return;
+            }
             StopAccount(acc);
         }
 
@@ -1858,11 +1896,7 @@ namespace PhucHsoManager
         private IntPtr AccountWindow(AccountItem acc)
         {
             if (!acc.IsRunning) return IntPtr.Zero;
-            uint pid;
-            if (acc.WindowHandle != IntPtr.Zero && Win32.IsWindow(acc.WindowHandle)) {
-                Win32.GetWindowThreadProcessId(acc.WindowHandle, out pid);
-                if (pid == acc.Process.Id) return acc.WindowHandle;
-            }
+            if (Win32.MainWindowScore(acc.WindowHandle, acc.Process.Id) >= 0) return acc.WindowHandle;
             return acc.WindowHandle = Win32.FindMainWindow(acc.Process.Id);
         }
 
@@ -1920,8 +1954,7 @@ namespace PhucHsoManager
             } else {
                 if (acc.WindowHandle != IntPtr.Zero && !acc.HiddenWindows.Contains(acc.WindowHandle)) acc.HiddenWindows.Add(acc.WindowHandle);
                 foreach (IntPtr h in acc.HiddenWindows) {
-                    uint owner; Win32.GetWindowThreadProcessId(h, out owner);
-                    if (owner == pid && Win32.IsWindow(h)) Win32.ShowWindowAsync(h, Win32.SW_RESTORE);
+                    if (Win32.MainWindowScore(h, pid) >= 0) Win32.ShowWindowAsync(h, Win32.SW_RESTORE);
                 }
                 acc.HiddenWindows.Clear();
             }
@@ -1929,36 +1962,57 @@ namespace PhucHsoManager
 
         private void TileWindows()
         {
+            if (tileTimer != null) { tileTimer.Stop(); tileTimer.Dispose(); tileTimer = null; }
             SetAllVisible(true);
-            List<IntPtr> handles = new List<IntPtr>();
-            foreach (var acc in accounts)
-            {
-                if (acc.IsRunning)
-                {
-                    acc.WindowHandle = AccountWindow(acc);
-                    if (acc.WindowHandle != IntPtr.Zero) handles.Add(acc.WindowHandle);
+            var handles = new List<IntPtr>();
+            var owners = new List<int>();
+            // Follow the order actually displayed in the account table.
+            foreach (DataGridViewRow row in dgvAccounts.Rows) {
+                var acc = row.DataBoundItem as AccountItem;
+                if (acc == null || !acc.IsRunning) continue;
+                IntPtr handle = AccountWindow(acc);
+                if (handle != IntPtr.Zero && !handles.Contains(handle)) {
+                    handles.Add(handle); owners.Add(acc.Process.Id);
                 }
             }
-
-            if (handles.Count == 0)
-            {
-                MessageBox.Show("Hiện không có bản game nào đang chạy để sắp xếp!", "Thông báo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (handles.Count == 0) {
+                lblStatus.Text = "Chưa tìm thấy cửa sổ game để sắp xếp; chờ game mở cửa sổ rồi thử lại.";
                 return;
             }
-
-            Rectangle screen = Screen.FromControl(this).WorkingArea;
-            int count = handles.Count;
-            Rectangle[] layout = WindowLayout.Arrange(screen, count);
-
-            for (int i = 0; i < count; i++)
-            {
-                IntPtr h = handles[i];
-                Win32.ShowWindowAsync(h, Win32.SW_RESTORE);
-                Rectangle box = layout[i];
-                Win32.MoveWindow(h, box.X, box.Y, box.Width, box.Height, true);
-            }
-
-            lblStatus.Text = string.Format("Đã xếp sát {0} cửa sổ trên màn hình hiện tại.", count);
+            Rectangle area = Screen.FromControl(this).WorkingArea;
+            int attempts = 0, stableTicks = 0;
+            var timer = new System.Windows.Forms.Timer { Interval = 250 };
+            tileTimer = timer;
+            // AWT can restore/repack after the first move. Verify actual bounds and
+            // retry on later UI ticks instead of treating an accepted command as success.
+            timer.Tick += delegate {
+                var sizes = new Size[handles.Count];
+                for (int i = 0; i < handles.Count; i++) {
+                    Win32.WindowRect rect;
+                    if (Win32.GetWindowRect(handles[i], out rect))
+                        sizes[i] = new Size(rect.Right - rect.Left, rect.Bottom - rect.Top);
+                }
+                Rectangle[] layout = WindowLayout.Arrange(area, sizes);
+                int placed = 0;
+                for (int i = 0; i < handles.Count; i++) {
+                    uint owner; Win32.GetWindowThreadProcessId(handles[i], out owner);
+                    if (owner != owners[i] || !Win32.IsWindow(handles[i])) continue;
+                    if (Win32.AtPosition(handles[i], layout[i].Location)) { placed++; continue; }
+                    Rectangle box = layout[i];
+                    Win32.SetWindowPos(handles[i], IntPtr.Zero, box.X, box.Y, 0, 0, 0x4000 | 0x0004 | 0x0010 | 0x0001 /* SWP_NOSIZE */);
+                }
+                attempts++;
+                stableTicks = placed == handles.Count ? stableTicks + 1 : 0;
+                if (stableTicks >= 3 || attempts >= 16) {
+                    timer.Stop(); timer.Dispose();
+                    if (tileTimer == timer) tileTimer = null;
+                    lblStatus.Text = placed == handles.Count
+                        ? "Đã xếp " + placed + "/" + handles.Count + " cửa sổ từ trái sang phải theo thứ tự tài khoản."
+                        : "Mới xếp được " + placed + "/" + handles.Count + " cửa sổ; cửa sổ còn lại chưa phản hồi hoặc tự thay đổi kích thước.";
+                }
+            };
+            lblStatus.Text = "Đang xếp cửa sổ từ trái sang phải...";
+            timer.Start();
         }
 
         private void OpenRmsFolder()

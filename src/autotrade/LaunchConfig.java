@@ -23,12 +23,20 @@ public final class LaunchConfig {
         String mount=System.getProperty("phuc.mountname");
         if (mount!=null) { c.mountName=mount.trim(); c.mountItem=-1; }
     }
+    private static String serverName(String name) {
+        String s=TradeStock.normalize(name).trim();
+        // The game adds a display-only marker to newly opened servers.
+        String[] suffixes={"(new)", "(moi)"};
+        for (int i=0;i<suffixes.length;i++)
+            if (s.endsWith(suffixes[i])) s=s.substring(0,s.length()-suffixes[i].length()).trim();
+        return s;
+    }
     public static int serverIndex(String requested,String[][] servers) {
         if (requested==null || servers==null) return -1;
         for (int i=0;i<servers.length;i++) {
             String[] entry=servers[i];
             if (entry!=null && entry.length>0 && entry[0]!=null
-                    && TradeStock.normalize(requested).trim().equals(TradeStock.normalize(entry[0]).trim())) return i;
+                    && serverName(requested).equals(serverName(entry[0]))) return i;
         }
         return -1;
     }

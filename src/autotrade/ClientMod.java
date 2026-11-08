@@ -411,6 +411,11 @@ public final class ClientMod {
                     }
                     String user=System.getProperty("phuc.user"), pass=System.getProperty("phuc.pass");
                     int requested=LaunchConfig.serverIndex(server,CLib.mSystem.listServer);
+                    if (startupLogin.pending() && !Session_ME.gI().isConnected() && !Session_ME.gI().connecting) {
+                        ProxyConnection.startupStatus(StartupLogin.waitingReason(user,pass,requested,
+                                GameCanvas.login.section==0 && LoginScreen.tfusername!=null && LoginScreen.tfpassword!=null,
+                                GameCanvas.currentDialog!=null,GameCanvas.menu2.isShowMenu));
+                    }
                     boolean ready=user!=null && user.length()>0 && pass!=null && pass.length()>0
                             && requested>=0 && GameCanvas.IndexServer==(byte)requested
                             && GameCanvas.login.section==0 && GameCanvas.currentDialog==null
@@ -420,7 +425,10 @@ public final class ClientMod {
                         status="Đang đăng nhập tài khoản từ quản lí";
                         GameCanvas.login.commandTab(0,0);
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable error) {
+                    ProxyConnection.startupStatus("Lỗi chuẩn bị đăng nhập: "+error.getClass().getName());
+                    ConnectionTrace.failure(error);
+                }
             }
             if (System.getProperty("phuc.user")==null && resumePending && config.reconnect && charId>=0 && GameCanvas.currentScreen==GameCanvas.login && !reconnecting) {
                 reconnecting=true; selectionSent=false; reconnectAt=now+1000;

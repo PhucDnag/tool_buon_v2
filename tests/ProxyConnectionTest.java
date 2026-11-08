@@ -64,7 +64,16 @@ public class ProxyConnectionTest {
         } finally { server.close(); }
     }
     public static void main(String[] args) throws Exception {
+        File statusFile=new File("build/proxy-startup-test.cmd.proxy");
+        System.setProperty("phuc.control",new File("build/proxy-startup-test.cmd").getAbsolutePath());
+        System.setProperty("phuc.proxy.enabled","1");
+        ProxyConnection.startupStatus("Chưa đăng nhập: không tìm thấy máy chủ");
+        check(statusFile.isFile(),"Manager receives status before any socket connection");
+        check(hud().indexOf("máy chủ")>=0,"Startup blocker is visible instead of waiting for proxy");
         for (int i=0;i<4;i++) scenario(i);
+        String lastStatus=hud();
+        ProxyConnection.startupStatus("Startup stale status");
+        check(lastStatus.equals(hud()),"Startup diagnostics cannot overwrite transport failure");
         org.microemu.app.classloader.MIDletClassLoader loader=new org.microemu.app.classloader.MIDletClassLoader(ProxyConnectionTest.class.getClassLoader());
         loader.configure(new org.microemu.app.classloader.MIDletClassLoaderConfig(),false);
         loader.disableClassPreporcessing(org.microemu.Injected.class);
@@ -75,6 +84,8 @@ public class ProxyConnectionTest {
         socketType=loader.loadClass("CLib.mSocket"); proxyType=loader.loadClass("autotrade.ProxyConnection");
         for (int i=0;i<4;i++) scenario(i);
         System.out.println("PASS actual MicroEmulator classloader SOCKS5 transport");
+        System.clearProperty("phuc.control");
+        statusFile.delete();
         System.setProperty("phuc.proxy.enabled","0");
         check(!ProxyConnection.enabled(),"Direct mode remains explicit");
         System.out.println("PASS SOCKS5 authenticated/unauthenticated tunnel, auth rejection, CONNECT rejection, no fallback, HUD privacy");
