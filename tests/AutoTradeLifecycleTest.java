@@ -226,6 +226,26 @@ public final class AutoTradeLifecycleTest {
         GameScreen.player.x=GameScreen.player.xStopMove; GameScreen.player.y=GameScreen.player.yStopMove;
         Navigator.stop(); live.navigation.walk(240,0,0,null,2100);
         check(GameScreen.player.posTransRoad==null,"Standing beside blocked portal cannot force movement into wall");
+        live=sale(beast);
+        live.serverText("Không bán được hàng"); live.tick(beast,4100); live.tick(beast,6200);
+        check(live.earnings.successfulTrips==0 && live.view.cargo==6,
+            "Negative sale reply cannot complete trip and erase loaded cargo");
+        live=sale(beast);
+        live.serverText("Bạn nhận được 1 Kim Cương"); live.tick(beast,4100); live.tick(beast,6200);
+        check(live.earnings.successfulTrips==0 && live.view.cargo==6,
+            "Unrelated item receipt cannot count as a sale");
+        live=sale(beast);
+        Object unrelated=new Object(); GameCanvas.currentDialog=unrelated;
+        mVector unrelatedButtons=buttons("Ok", "Hủy");
+        live.dialog(unrelated,"Bạn có muốn dùng 100 vàng để nâng cấp?",unrelatedButtons); live.tick(beast,4100);
+        check(((iCommand)unrelatedButtons.elementAt(0)).calls==0 && GameCanvas.currentDialog==unrelated,
+            "Vietnamese pronoun ban with gold must not be mistaken for selling");
+        live=sale(beast);
+        live.engine.state=TradeEngine.BUY;
+        GameScreen.ObjFocus=beast;
+        check(live.animalCargo("Lừa vàng",6),"Receive refreshed inventory after interrupted escort");
+        live.tick(beast,4100);
+        check(live.earnings.failedTrips==0,"Re-reading unchanged inventory cannot count as buying a new trip");
         System.out.println("PASS automatic trade lifecycle: "+checks+" assertions");
     }
 }

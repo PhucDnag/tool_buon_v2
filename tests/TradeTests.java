@@ -189,6 +189,11 @@ public final class TradeTests {
         check(e.state==TradeEngine.WAIT_SALE && p.sells==1,"Unknown-cargo trip can reach seller and request sale");
         check(TradeSignals.cargo("Thú đang chở 12 viên saphia") == 12,"Cargo parsed from animal info");
         check(TradeSignals.cargo("HP: 123/456") == -1,"HP cannot become cargo");
+        check(TradeSignals.cargo("HP: 400000/400000") == -1,"Zero-ending full HP cannot become empty cargo");
+        check(TradeSignals.cargo("HP: 0/400000") == -1,"Dead animal HP is not cargo");
+        check(TradeSignals.cargo("HP: 40/100 MP: 0/100") == -1,"HP/MP are not inventory counts");
+        check(TradeSignals.cargo("0/6") == 0 && TradeSignals.cargo("0 viên saphia") == 0,"Actual zero cargo remains supported");
+        check(TradeSignals.destroysTrip("Bạn có muốn hủy chuyến đi buôn?"),"Recognize entire-trip cancellation");
         check(TradeSignals.cargo("Số hàng: 0/20") == 0,"Empty animal confirmed");
         check(TradeSignals.cargo("Số lượng hàng: 18") == 18,"Cargo variant so luong hang");
         check(TradeSignals.cargo("Sức chở: 6/6") == 6,"Cargo variant suc cho");
@@ -260,24 +265,28 @@ public final class TradeTests {
         check(e.state==TradeEngine.WAIT_NEW && v.cargo==-1,"Replacement cannot invent cargo from previous animal");
         v.gemDrops=true; v.cargo=1; e.tick(v,8000);
         check(e.state==TradeEngine.WAIT_NEW,"Partial pickup keeps collecting remaining drops");
-        e.onActionProgress(31000); e.tick(v,33000);
+        e.onActionProgress(41000); e.tick(v,42000);
         check(e.state==TradeEngine.TO_SELL,"Uncollectable drops cannot stop a trip with recovered cargo");
         for (int outcome=0;outcome<3;outcome++) {
             p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
             v.animal=true; v.cargo=6; v.hp=1; v.maxHp=100; e.state=TradeEngine.TO_SELL;
             e.tick(v,1000); v.animal=false; e.tick(v,2000);
             v.animal=outcome!=0; v.hp=100; v.cargo=outcome==1 ? 0 : -1;
-            v.gemDrops=outcome==1; e.tick(v,33000);
+            v.gemDrops=outcome!=0; e.tick(v,41999);
+            check(e.state==TradeEngine.WAIT_NEW,"Keep checking pickup until the full 40 seconds elapse");
+            e.onActionProgress(41999); e.tick(v,42000);
             if (outcome==0) {
                 check(e.state==TradeEngine.TO_MARKET,"Missing replacement animal starts a new trip after grace period");
-                e.tick(v,35000);
-                e.onStock(0,e.stockRequest(),"Kim Cương: 5",35100); e.tick(v,36000);
+                e.tick(v,44000);
+                e.onStock(0,e.stockRequest(),"Kim Cương: 5",44100); e.tick(v,45000);
                 check(e.state==TradeEngine.SUMMON,"Lost trip returns to stock check and summon");
-            } else if (outcome==1) {
-                check(e.state==TradeEngine.RECALL,"Robbed empty animal is recalled even with uncollectable drops");
-                e.tick(v,34000); v.animal=false; e.tick(v,35000);
-                check(e.state==TradeEngine.TO_MARKET,"Confirmed recall of empty animal starts new trip");
-            } else check(e.state==TradeEngine.RESYNC,"Unknown inventory on a visible animal waits for synchronization, not cargo cancellation");
+            } else {
+                check(e.state==TradeEngine.RECALL,"Empty or unconfirmed replacement is recalled after 40 seconds even with drops");
+                e.tick(v,42150);
+                check(e.state==TradeEngine.WAIT_RECALL && p.recalls==2,"Send cancellation and wait for server removal before restarting");
+                v.animal=false; e.tick(v,43000);
+                check(e.state==TradeEngine.TO_MARKET,"Confirmed recall starts new trip");
+            }
         }
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
         e.state=TradeEngine.SELL; v.atSeller=true; v.animal=true; v.cargo=6; e.tick(v,1000);
@@ -286,6 +295,14 @@ public final class TradeTests {
         check(e.state==TradeEngine.RECOVER && p.recoveries>0,"Death during sale resumes recovery after village revival");
         v.animal=true; v.animalMissing=false; e.tick(v,16000);
         check(e.state==TradeEngine.TO_SELL,"Reunited animal resumes interrupted sale trip");
+        p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
+        v.animal=true; v.cargo=6; v.hp=1; v.maxHp=100; e.state=TradeEngine.TO_SELL;
+        e.tick(v,1000); v.animal=false; e.tick(v,2000);
+        v.animal=true; v.hp=100; v.cargo=0; v.gemDrops=false;
+        e.tick(v,7000); e.tick(v,8000);
+        check(e.state==TradeEngine.WAIT_NEW && p.recalls==1,"Empty replacement must receive the entire 40-second pickup grace even before drops appear");
+        e.tick(v,42000);
+        check(e.state==TradeEngine.RECALL,"Empty replacement is abandoned only after pickup deadline");
         System.out.println("PASS "+checks+" assertions");
     }
 }

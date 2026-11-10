@@ -161,8 +161,9 @@ public final class LiveTrade implements TradeEngine.Port {
         String normName=TradeStock.normalize(name);
         String normBeast=TradeStock.normalize(beast.name);
         boolean isTradeAnimalName=normName.equals(normBeast)
-                || TradeSignals.animal(name,0) || TradeSignals.animal(name,1) || TradeSignals.animal(name,2)
-                || normName.indexOf("hanh trang")>=0 || normName.indexOf("thong tin")>=0 || normName.indexOf("hang")>=0;
+                || normName.equals("hanh trang") || normName.equals("hanh trang thu")
+                || normName.equals("hang tren thu") || normName.equals("thong tin thu")
+                || normName.equals("thong tin thu buon");
         if (!isTradeAnimalName) return false;
         if (beast!=GameScreen.ObjFocus && (beast.ID!=cargoRequestAnimal || GameCanvas.loadmap.idMap!=cargoRequestMap)) return false;
         Event e=new Event(); e.type=6; e.id=beast.ID; e.menu=count; e.map=GameCanvas.loadmap.idMap; enqueue(e);
@@ -323,6 +324,7 @@ public final class LiveTrade implements TradeEngine.Port {
         }
     }
     public void resetLostTrip() {
+        earnings.abandon();
         detail="";
         clearIntent(); hadBeast=false; absentAt=0; view.cargo=0; view.full=false; view.animalMissing=false; leashSecured=false;
         reconnecting=false; resumeEscorting=false; resumeBuying=false; cargoRequestAnimal=-1;
@@ -491,6 +493,9 @@ public final class LiveTrade implements TradeEngine.Port {
             Navigator.stop();
         }
         Event event; for (int n=0;n<128 && (event=poll())!=null;n++) process(event,now);
+        if (active() && engine.state!=TradeEngine.WAIT_RECALL && engine.state!=TradeEngine.RECALL)
+            earnings.observeCargo(view.cargo>0 || view.full,
+                engine.state==TradeEngine.TO_SELL || engine.state==TradeEngine.SELL || engine.state==TradeEngine.WAIT_SALE);
         boolean coinsReceived=coinsBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.coin>coinsBeforeSale;
         boolean emptyAnimal=beast!=null && view.cargo==0 && !view.full;
         boolean saleFinished=saleAcknowledged || emptyAnimal || coinsReceived && beast==null;
@@ -562,7 +567,8 @@ public final class LiveTrade implements TradeEngine.Port {
         if (engine.state==TradeEngine.RESYNC) return;
         beastHasCargo=beast!=null && (view.cargo>0 || view.full) && engine.state!=TradeEngine.WAIT_NEW;
         if (beastHasCargo) view.gemDrops=false;
-        if (view.animal && !beastHasCargo && (view.gemDrops || engine.state==TradeEngine.WAIT_NEW)) {
+        if (view.animal && !beastHasCargo && engine.state!=TradeEngine.RECALL
+                && engine.state!=TradeEngine.WAIT_RECALL && (view.gemDrops || engine.state==TradeEngine.WAIT_NEW)) {
             MainObject nearestGem=findNearestGem();
             if (nearestGem!=null) {
                 if (Player.autoItem==null) Player.autoItem=new AutoGetItem((byte)0,(byte)0,(byte)0);
@@ -695,9 +701,20 @@ public final class LiveTrade implements TradeEngine.Port {
             }
         }
         // NPC stock quantities must never be counted as cargo on the animal.
-        boolean infoSource=(e.type==2 && e.id==-56 || (e.type==3 || e.type==5) && beast!=null)
+        boolean requestedCargo=beast!=null && cargoRequestAnimal==beast.ID
+                && cargoRequestMap==e.map && now-cargoRequestAt<=15000;
+        boolean explicitCargo=s.indexOf("hang tren thu")>=0 || s.indexOf("so hang")>=0
+                || s.indexOf("so luong hang")>=0 || s.indexOf("dang cho")>=0
+                || beast!=null && s.indexOf(TradeStock.normalize(beast.name))>=0;
+        // Global dialogs/server text are not animal inventory. In particular,
+        // unrelated "So luong: 0" must never trigger cancellation of a loaded animal.
+        boolean infoSource=(e.type==2 && e.id==-56 && beast!=null
+                || (e.type==3 || e.type==5) && (requestedCargo && explicitCargo
+                    || tradeResponse && isBuying() && TradeSignals.bought(s)))
                 && reportedStock.choose(0)<0 && !reportedStock.empty();
         boolean cargoReported=false;
+        // An inventory refresh is not another purchase after an interrupted escort.
+        if (tradeResponse && isBuying() && TradeSignals.bought(s)) earnings.buyingAgain();
         if (infoSource && e.text!=null) {
             int cargo=TradeSignals.cargo(e.text);
             if (cargo>=0) {
@@ -741,7 +758,9 @@ public final class LiveTrade implements TradeEngine.Port {
                 for (int i=0;i<e.choices.size();i++) {
                     String label=TradeStock.normalize(((iCommand)e.choices.elementAt(i)).caption);
                     if ((label.indexOf("hanh trang")>=0 || label.indexOf("hang")>=0 || label.indexOf("thong tin")>=0)
-                            && !TradeSignals.sell(label) && !TradeSignals.recall(label)) {
+                            && !TradeSignals.sell(label) && !TradeSignals.recall(label)
+                            && label.indexOf("huy")<0 && label.indexOf("bo hang")<0
+                            && !TradeSignals.destroysTrip(label)) {
                         GlobalService.gI().Dynamic_Menu((short)-56,(byte)e.menu,(byte)i);
                         GameCanvas.menu2.isShowMenu=false; return;
                     }
@@ -778,11 +797,19 @@ public final class LiveTrade implements TradeEngine.Port {
         }
         if (tradeResponse && e.type==3 && e.dialog==GameCanvas.currentDialog && e.choices!=null
                 && !view.dead && engine.state!=TradeEngine.PAUSED && !TradeConfig.tradingClosed(now)) {
+            if (TradeSignals.destroysTrip(e.text)
+                    && !(intent==RECALL && engine.state==TradeEngine.WAIT_RECALL)) {
+                // Replacement must preserve this trip. Only the explicit abandon
+                // path (empty animal / failed pickup timeout) may cancel it.
+                GameCanvas.end_Dialog();
+                detail="Không hủy chuyến đang có hàng khi đổi thú";
+                return;
+            }
             boolean confirm=intent==SELL && saleSent && TradeSignals.sell(s)
                     || intent==RECALL && recalled && (TradeSignals.recall(s) || TradeSignals.animalUseConfirmation(s)
                         || TradeSignals.replaceAnimalConfirmation(e.text))
                     || intent==SUMMON && summoned && (TradeSignals.animal(s,config.animal) || TradeSignals.animal(s,0) || TradeSignals.animal(s,1) || TradeSignals.animal(s,2)
-                        || TradeSignals.animalUseConfirmation(s) || (engine.state!=TradeEngine.WAIT_NEW && beast==null && TradeSignals.replaceAnimalConfirmation(e.text)))
+                        || TradeSignals.animalUseConfirmation(s) || (beast==null && TradeSignals.replaceAnimalConfirmation(e.text)))
                     || intent==BUY && (purchaseSent || itemPurchaseSent) && (TradeSignals.gem(s,argument) || s.indexOf("mua")>=0 || s.indexOf("da quy")>=0 || s.indexOf("hang")>=0)
                     || TradeSignals.startTradeConfirmation(e.text)
                         && (intent==SUMMON && summoned || intent==BUY && buyer!=null);
@@ -839,8 +866,7 @@ public final class LiveTrade implements TradeEngine.Port {
         String s=TradeStock.normalize(text!=null ? text : "");
         boolean inSellerContext=intent==SELL && (engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL)
                 && seller!=null && distance(seller)<=64 && Navigator.same(GameCanvas.loadmap.nameMap, TradeConfig.SELLER_MAP);
-        boolean isSalePrompt=TradeSignals.sell(s) || s.indexOf("ban tat ca")>=0 || s.indexOf("ban toan bo")>=0
-                || s.indexOf("muon ban")>=0 || (s.indexOf("ban")>=0 && (s.indexOf("vang")>=0 || s.indexOf("gia")>=0));
+        boolean isSalePrompt=TradeSignals.sell(s);
         if (inSellerContext && isSalePrompt) {
             long amount=TradeEarnings.amount(text);
             if (amount>0) saleAmount=amount;
@@ -958,6 +984,8 @@ public final class LiveTrade implements TradeEngine.Port {
             int chosen=-1, generic=-1;
             for (int i=0;i<menu.size();i++) {
                 String label=TradeStock.normalize(((iCommand)menu.elementAt(i)).caption);
+                if (TradeSignals.destroysTrip(label)
+                        && !(intent==RECALL && engine.state==TradeEngine.WAIT_RECALL)) continue;
                 if (intent==SUMMON && TradeSignals.animal(label,argument) || intent==BUY && TradeSignals.gem(label,argument)
                         || intent==SELL && TradeSignals.sell(label) || intent==RECALL && TradeSignals.recall(label)) { chosen=i; break; }
                 if ((intent==BUY || intent==SELL) && label.equals("mua ban")

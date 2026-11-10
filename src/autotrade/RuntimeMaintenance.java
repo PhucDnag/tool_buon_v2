@@ -24,6 +24,7 @@ public final class RuntimeMaintenance {
         } catch (IOException ignored) {}
     }
     private long nextPoll, nextGc, nextPaint, lastGold=-1, lastUnknown=-1;
+    private long lastSuccessful=-1, lastFailed=-1;
     private int gcMinutes;
     private boolean background;
     private long nextMemoryCheck, nextLowMemGc;
@@ -76,12 +77,14 @@ public final class RuntimeMaintenance {
             nextGc=now+gcMinutes*60000L;
             System.gc();
         }
-        if (earnings.gold==lastGold && earnings.unmeasured==lastUnknown) return;
+        if (earnings.gold==lastGold && earnings.unmeasured==lastUnknown
+                && earnings.successfulTrips==lastSuccessful && earnings.failedTrips==lastFailed) return;
         try {
             File dest=new File(control+".stats");
             Writer out=new FileWriter(dest,false);
-            try { out.write(earnings.gold+":"+earnings.unmeasured+"\n"); out.flush(); } finally { out.close(); }
+            try { out.write(earnings.gold+":"+earnings.unmeasured+":"+earnings.successfulTrips+":"+earnings.failedTrips+"\n"); out.flush(); } finally { out.close(); }
             lastGold=earnings.gold; lastUnknown=earnings.unmeasured;
+            lastSuccessful=earnings.successfulTrips; lastFailed=earnings.failedTrips;
         } catch (IOException ignored) {}
     }
 }

@@ -3,7 +3,20 @@ package autotrade;
 /** Gross sale receipts only. Never infer income from unrelated wallet changes. */
 public final class TradeEarnings {
     public long gold, unmeasured;
+    public long successfulTrips, failedTrips;
+    private boolean loaded, departed;
+    public void observeCargo(boolean hasCargo, boolean escorting) {
+        if (hasCargo) loaded=true;
+        if (loaded && escorting) departed=true;
+    }
+    public void buyingAgain() { if (departed) abandon(); }
+    public void abandon() {
+        if (loaded) failedTrips++;
+        loaded=false; departed=false;
+    }
     public void complete(long amount) {
+        successfulTrips++;
+        loaded=false; departed=false;
         if (amount>=0 && gold<=Long.MAX_VALUE-amount) gold+=amount;
         else unmeasured++;
     }

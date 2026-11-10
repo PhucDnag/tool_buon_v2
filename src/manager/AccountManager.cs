@@ -273,6 +273,10 @@ namespace PhucHsoManager
         public string Notes { get; set; }
         public long TradeGold { get; set; }
         public long UnmeasuredSales { get; set; }
+        public long SuccessfulTrips { get; set; }
+        public long FailedTrips { get; set; }
+        [ScriptIgnore] public long SessionSuccessfulTrips { get; set; }
+        [ScriptIgnore] public long SessionFailedTrips { get; set; }
         [ScriptIgnore] public long SessionGold { get; set; }
         [ScriptIgnore] public long SessionUnmeasured { get; set; }
         [ScriptIgnore] public bool Background { get; set; }
@@ -280,19 +284,25 @@ namespace PhucHsoManager
         public bool ReadTradeSnapshot(string text)
         {
             string[] parts = text.Trim().Split(':');
-            long gold, unknown;
-            if (parts.Length != 2 || !long.TryParse(parts[0], out gold) || !long.TryParse(parts[1], out unknown)
+            long gold, unknown, successful = SessionSuccessfulTrips, failed = SessionFailedTrips;
+            if ((parts.Length != 2 && parts.Length != 4) || !long.TryParse(parts[0], out gold) || !long.TryParse(parts[1], out unknown)
                 || gold < SessionGold || unknown < SessionUnmeasured || gold < 0 || unknown < 0) return false;
+            if (parts.Length == 4 && (!long.TryParse(parts[2], out successful) || !long.TryParse(parts[3], out failed)
+                || successful < SessionSuccessfulTrips || failed < SessionFailedTrips || successful < 0 || failed < 0)) return false;
             long delta = gold - SessionGold, missing = unknown - SessionUnmeasured;
+            long wins = successful - SessionSuccessfulTrips, losses = failed - SessionFailedTrips;
             if (delta > long.MaxValue - TradeGold || missing > long.MaxValue - UnmeasuredSales) return false;
+            if (wins > long.MaxValue - SuccessfulTrips || losses > long.MaxValue - FailedTrips) return false;
             TradeGold += delta; UnmeasuredSales += missing;
+            SuccessfulTrips += wins; FailedTrips += losses;
             SessionGold = gold; SessionUnmeasured = unknown;
-            return delta != 0 || missing != 0;
+            SessionSuccessfulTrips = successful; SessionFailedTrips = failed;
+            return delta != 0 || missing != 0 || wins != 0 || losses != 0;
         }
 
         public bool ShouldRestartStalled(long now)
         {
-            if (UserStopped || string.IsNullOrEmpty(ControlFile)) return false;
+            if (!AutoRestart || UserStopped || string.IsNullOrEmpty(ControlFile)) return false;
             try {
                 string path = ControlFile + ".health";
                 if (!File.Exists(path)) return false;
@@ -1239,6 +1249,10 @@ namespace PhucHsoManager
             dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "ProxyStatus", HeaderText = "Proxy SOCKS5", DataPropertyName = "ProxyStatus", ReadOnly = true, Width = 230 });
             dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "TradeGold", HeaderText = "Vàng bán hàng", DataPropertyName = "TradeGold", ReadOnly = true, Width = 130,
                 DefaultCellStyle = new DataGridViewCellStyle { Format = "N0" } });
+            dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "SuccessfulTrips", HeaderText = "Chuyến thành công", DataPropertyName = "SuccessfulTrips", ReadOnly = true, Width = 135,
+                DefaultCellStyle = new DataGridViewCellStyle { Format = "N0" } });
+            dgvAccounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "FailedTrips", HeaderText = "Chuyến chưa thành công", DataPropertyName = "FailedTrips", ReadOnly = true, Width = 165,
+                DefaultCellStyle = new DataGridViewCellStyle { Format = "N0" } });
 
             // Keep secondary settings in the edit dialog; preserve column indices.
             colId.Visible = colDisplayName.Visible = colPass.Visible = colTrade.Visible = colRestart.Visible = colNotes.Visible = false;
@@ -1444,9 +1458,9 @@ namespace PhucHsoManager
                 SaveAccounts();
                 dgvAccounts.Refresh();
             }
-            decimal totalGold = 0, unmeasured = 0;
-            foreach (var acc in accounts) { totalGold += acc.TradeGold; unmeasured += acc.UnmeasuredSales; }
-            lblGold.Text = string.Format("Tổng vàng bán hàng: {0:N0} (chưa trừ vốn) | Chuyến chưa rõ số vàng: {1:N0}", totalGold, unmeasured);
+            decimal totalGold = 0, unmeasured = 0, successful = 0, failed = 0;
+            foreach (var acc in accounts) { totalGold += acc.TradeGold; unmeasured += acc.UnmeasuredSales; successful += acc.SuccessfulTrips; failed += acc.FailedTrips; }
+            lblGold.Text = string.Format("Tổng vàng bán hàng: {0:N0} (chưa trừ vốn) | Thành công: {2:N0} | Chưa thành công: {3:N0} | Chưa rõ số vàng: {1:N0}", totalGold, unmeasured, successful, failed);
             dgvAccounts.InvalidateColumn(13);
 
             dgvAccounts.InvalidateColumn(10);
@@ -1698,6 +1712,7 @@ namespace PhucHsoManager
                 Directory.CreateDirectory(controlDir);
                 acc.ControlFile = Path.Combine(controlDir, Guid.NewGuid().ToString("N") + ".cmd");
                 acc.SessionGold = acc.SessionUnmeasured = 0;
+                acc.SessionSuccessfulTrips = acc.SessionFailedTrips = 0;
                 acc.Background = allHidden;
                 WriteRuntimeSettings(acc);
                 vmArgs.Add("-Dphuc.control=\"" + acc.ControlFile + "\"");

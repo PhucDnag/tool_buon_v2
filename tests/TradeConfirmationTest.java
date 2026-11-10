@@ -852,6 +852,7 @@ public final class TradeConfirmationTest {
         live.tick(null,169000);
         check(live.engine.state==TradeEngine.TO_MARKET,"Gold increase confirms sale and loops back to market");
         check(live.earnings.gold==480000,"Earnings recorded gold gained from sale");
+        check(live.earnings.successfulTrips==1 && live.earnings.failedTrips==0,"Confirmed sale counts one successful trip");
 
         live=start(); live.engine.state=TradeEngine.TO_SELL;
         GameCanvas.loadmap.idMap=20; GameCanvas.loadmap.nameMap="Sa Mạc";
@@ -864,6 +865,81 @@ public final class TradeConfirmationTest {
         check(Model.CRes.saveCalls-saves==2,"Two thousand update ticks persist recovery only twice over ten seconds: "+(Model.CRes.saveCalls-saves));
         live.tick(null,210000);
         check(Model.CRes.saveCalls-saves==3,"Losing animal immediately persists last known location");
+        // Uncollectable drops must not intercept the cancellation action after 40s.
+        live=start(); live.engine.state=TradeEngine.TO_SELL;
+        beast=new MainObject(); beast.ID=9200; beast.name="Lừa vàng";
+        beast.x=200; beast.y=200; beast.hp=1; beast.maxHp=100;
+        live.view.cargo=6; live.tick(beast,3000); live.tick(null,4000);
+        replacement=new MainObject(); replacement.ID=9201; replacement.name="Lừa vàng";
+        replacement.x=200; replacement.y=200; replacement.hp=100; replacement.maxHp=100;
+        drop=new MainObject(); drop.ID=9202; drop.typeObject=4; drop.name="Kim Cương";
+        drop.x=230; drop.y=200; GameScreen.Vecplayers.addElement(drop);
+        live.tick(replacement,5000); live.tick(replacement,43999);
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Pickup remains active just before 40s timeout");
+        int cancelUses=net.potionCalls;
+        live.tick(replacement,44000); live.tick(replacement,44200);
+        check(live.engine.state==TradeEngine.WAIT_RECALL && net.potionCalls==cancelUses+1,
+            "After 40s unknown cargo cancels animal despite gems still on ground");
+        live.tick(null,45000);
+        check(live.engine.state==TradeEngine.TO_MARKET,"Server removal after pickup timeout restarts trip");
+        check(live.earnings.failedTrips==1 && live.earnings.successfulTrips==0,"Pickup timeout abandoning purchased cargo counts one failed trip");
+        live=start(); live.engine.state=TradeEngine.TO_SELL;
+        beast=new MainObject(); beast.ID=9300; beast.name="Lừa vàng";
+        beast.x=200; beast.y=200; beast.hp=100; beast.maxHp=100;
+        live.view.cargo=6; live.view.full=true; live.tick(beast,3000);
+        int unintendedRecalls=net.potionCalls;
+        live.serverText("Số lượng: 0"); live.tick(beast,4000);
+        check(live.view.cargo==6 && live.view.full && net.potionCalls==unintendedRecalls,
+            "Unrelated quantity-zero message during escort cannot erase cargo or cancel loaded animal");
+        GameScreen.ObjFocus=beast;
+        check(!live.cargoShop(new mVector(),13,11,"Cửa hàng")
+                && !live.cargoShop(new mVector(),13,11,"Bò vàng"),
+            "Generic shop or another animal inventory cannot clear current animal cargo");
+        dialog=new Object(); GameCanvas.currentDialog=dialog;
+        live.dialog(dialog,"Số lượng: 0",options("Ok")); live.tick(beast,4200);
+        check(live.view.cargo==6 && net.potionCalls==unintendedRecalls,
+            "Unrelated dialog with selected beast cannot trigger cancellation");
+        live.menu(options("Hành trang thú"),0,-56,"Lừa vàng HP: 400000/400000"); live.tick(beast,4400);
+        check(live.view.cargo==6 && live.view.full && net.potionCalls==unintendedRecalls,
+            "Animal HP ending in zero cannot become zero cargo and cancel a loaded animal");
+        live.menu(options("Hành trang thú"),0,-56,"Số hàng: 0/6"); live.tick(beast,4600);
+        check(live.view.cargo==0 && live.engine.state==TradeEngine.WAIT_RECALL,
+            "Actual animal menu still confirms empty cargo and permits cancellation");
+        live=start(); live.engine.state=TradeEngine.TO_SELL;
+        beast=new MainObject(); beast.ID=9400; beast.name="Lừa vàng";
+        beast.x=200; beast.y=200; beast.hp=1; beast.maxHp=100;
+        live.view.cargo=6; live.tick(beast,3000);
+        check(live.engine.state==TradeEngine.WAIT_REPLACE,"Low HP initiates replacement with cargo");
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,"Bạn có muốn hủy chuyến đi buôn? Toàn bộ hàng sẽ bị mất.",buttons);
+        live.tick(beast,3300);
+        check(ok.calls==0,"Replacing low-HP animal must not confirm cancellation of the entire loaded trip");
+        live.engine.state=TradeEngine.RECALL; live.tick(beast,3500);
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
+        live.dialog(dialog,"Bạn có muốn hủy chuyến đi buôn? Toàn bộ hàng sẽ bị mất.",buttons);
+        live.tick(beast,3800);
+        check(ok.calls==1,"Explicit abandonment still automatically confirms cancellation");
+        live=start(); live.engine.state=TradeEngine.TO_SELL;
+        beast=new MainObject(); beast.ID=9500; beast.name="Lừa vàng";
+        beast.x=200; beast.y=200; beast.hp=1; beast.maxHp=100;
+        live.view.cargo=6; live.tick(beast,3000); live.tick(null,4000);
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Removed old animal waits for replacement spawn");
+        String deadAnimalPrompt="Con vật buôn của bạn đang ở map Nghĩa địa cát vị trí 21 , 45. Bạn có muốn hủy con thú cũ để tạo con thú mới không ?";
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok");
+        buttons.addElement(new iCommand("Hủy")); ok=(iCommand)buttons.elementAt(0);
+        int replacementItemUses=net.potionCalls;
+        live.dialog(dialog,deadAnimalPrompt,buttons); live.tick(null,4500);
+        check(ok.calls==1 && ((iCommand)buttons.elementAt(1)).calls==0,
+            "Exact dead-animal replacement prompt automatically confirms during WAIT_NEW");
+        live.dialog(dialog,deadAnimalPrompt,buttons); live.tick(null,4700);
+        check(ok.calls==1 && net.potionCalls==replacementItemUses,
+            "Repeated replacement dialog cannot confirm twice or reuse animal item");
+        replacement=new MainObject(); replacement.ID=9501; replacement.name="Lừa vàng";
+        replacement.x=200; replacement.y=200; replacement.hp=100; replacement.maxHp=100;
+        live.tick(replacement,5000);
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Confirmed replacement still waits for cargo pickup");
+        live.animalCargo("Lừa vàng",6); live.tick(replacement,8500);
+        check(live.engine.state==TradeEngine.TO_SELL,"New animal with confirmed recovered cargo resumes escort");
         System.out.println("PASS trade confirmation and purchasing: "+checks+" assertions");
     }
 }

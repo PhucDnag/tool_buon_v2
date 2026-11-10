@@ -45,7 +45,7 @@ public class RuntimePathsTest : MarshalByRefObject
         }
         var income = new AccountItem();
         string recoveryControl = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Guid.NewGuid().ToString("N") + ".cmd");
-        var recovery = new AccountItem { ControlFile = recoveryControl };
+        var recovery = new AccountItem { ControlFile = recoveryControl, AutoRestart = true };
         try {
             File.WriteAllText(recoveryControl + ".restart", "animal-not-found\n");
             Check(!recovery.ShouldRestartStalled(200000), "Animal-not-found message never restarts a game");
@@ -54,6 +54,9 @@ public class RuntimePathsTest : MarshalByRefObject
             File.WriteAllText(recoveryControl + ".health", "200000:0:1");
             Check(!recovery.ShouldRestartStalled(200000), "Idle character with live tick is healthy");
             Check(!recovery.ShouldRestartStalled(259999) && recovery.ShouldRestartStalled(260000), "Restart only after 60 seconds without game ticks");
+            recovery.AutoRestart = false;
+            Check(!recovery.ShouldRestartStalled(260000), "Disabled automatic restart also disables stalled-game restart");
+            recovery.AutoRestart = true;
             File.WriteAllText(recoveryControl + ".health", "200000:110000:1");
             Check(recovery.ShouldRestartStalled(200000), "Unanswered network traffic for 90 seconds triggers recovery");
             File.WriteAllText(recoveryControl + ".health", "200000:110001:1");
@@ -74,6 +77,14 @@ public class RuntimePathsTest : MarshalByRefObject
         Check(income.ReadTradeSnapshot("15000:2") && income.TradeGold == 15000 && income.UnmeasuredSales == 2, "Incremental totals");
         income.SessionGold = income.SessionUnmeasured = 0;
         Check(income.ReadTradeSnapshot("50:0") && income.TradeGold == 15050, "New game session adds to saved totals");
+        Check(income.ReadTradeSnapshot("50:0:3:2") && income.SuccessfulTrips == 3 && income.FailedTrips == 2, "Trip counters without gold changes");
+        Check(!income.ReadTradeSnapshot("50:0:3:2"), "Repeated trip snapshot is idempotent");
+        Check(!income.ReadTradeSnapshot("60:0:3:1") && income.TradeGold == 15050, "Stale trip counter rejects whole snapshot");
+        Check(!income.ReadTradeSnapshot("50:0:3:") && !income.ReadTradeSnapshot("50:0:3:-1"), "Partial and negative counters rejected");
+        var tripJson = new System.Web.Script.Serialization.JavaScriptSerializer();
+        var savedTrips = tripJson.Deserialize<AccountItem>(tripJson.Serialize(income));
+        Check(savedTrips.SuccessfulTrips == 3 && savedTrips.FailedTrips == 2 && savedTrips.SessionSuccessfulTrips == 0, "Trip totals persist while session counters reset");
+        Check(savedTrips.ReadTradeSnapshot("0:0:1:1") && savedTrips.SuccessfulTrips == 4 && savedTrips.FailedTrips == 3, "New session accumulates saved trip totals");
         var area = new System.Drawing.Rectangle(-1920, 40, 1920, 1664);
         for (int count = 1; count <= 20; count++) {
             var sizes = new System.Drawing.Size[count];

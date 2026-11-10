@@ -114,7 +114,9 @@ public final class TradeSignals {
                 }
             }
         }
-        if (contains(s, new String[]{"chua co hang", "khong cho hang", "thu chua cho hang", "0 vien", "0/"})) return 0;
+        // Numeric cargo was handled above. Substring "0/" also matches
+        // HP: 400000/400000 and must never authorize destroying an animal.
+        if (contains(s, new String[]{"chua co hang", "khong cho hang", "thu chua cho hang"})) return 0;
         return -1;
     }
 
@@ -141,11 +143,20 @@ public final class TradeSignals {
             "ban hang", "ban da quy", "ban toan bo hang", "ban tat ca hang",
             "giao hang", "tra hang", "ban hang hoa", "ban toan bo", "ban tat ca",
             "muon ban", "ban voi gia"
-        }) || (norm.indexOf("ban") >= 0 && (norm.indexOf("vang") >= 0 || norm.indexOf("gia") >= 0));
+        });
     }
 
     public static boolean recall(String s) {
         return contains(s, new String[]{"thu hoi thu", "cat thu", "thu thu buon", "cat thu buon", "huy thu", "huy con", "huy chuyen di buon"});
+    }
+
+    /** Whole-trip cancellation is not a cargo-preserving animal replacement. */
+    public static boolean destroysTrip(String text) {
+        String s=TradeStock.normalize(text);
+        return contains(s,new String[]{"huy chuyen", "huy bo chuyen", "ket thuc chuyen"})
+                || (s.indexOf("hang")>=0 || s.indexOf("da quy")>=0)
+                    && contains(s,new String[]{"se bi mat", "se mat", "bi huy", "mat het", "mat toan bo"})
+                    && !startTradeConfirmation(text);
     }
 
     public static boolean bought(String text) {
@@ -159,10 +170,12 @@ public final class TradeSignals {
     }
 
     public static boolean sold(String s) {
+        s=TradeStock.normalize(s);
+        if (contains(s,new String[]{"khong", "chua", "that bai"})) return false;
         return contains(s, new String[]{
             "ban hang thanh cong", "ban thanh cong", "da ban het hang", "ban het hang",
-            "giao hang thanh cong", "nhan duoc", "ban duoc"
-        });
+            "giao hang thanh cong", "ban duoc"
+        }) || s.indexOf("nhan duoc")>=0 && TradeEarnings.amount(s)>=0;
     }
 
     public static boolean isConfirmButton(String caption) {
