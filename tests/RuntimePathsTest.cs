@@ -8,6 +8,21 @@ public class RuntimePathsTest : MarshalByRefObject
     [STAThread]
     public static void Main(string[] args = null)
     {
+        string xmlProfile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "xml-profile-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(xmlProfile);
+        var ensureConfig = typeof(MainForm).GetMethod("EnsureProfileConfig", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        ensureConfig.Invoke(null, new object[] { xmlProfile, "unused.jar" });
+        string xmlPath = Path.Combine(xmlProfile, "config2.xml");
+        Check(File.ReadAllBytes(xmlPath)[0] == (byte)'<', "New emulator config starts with XML rather than BOM");
+        string customized = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><config><custom>Tiếng Việt</custom></config>";
+        File.WriteAllText(xmlPath, customized, System.Text.Encoding.UTF8);
+        ensureConfig.Invoke(null, new object[] { xmlProfile, "unused.jar" });
+        Check(File.ReadAllBytes(xmlPath)[0] == (byte)'<' && File.ReadAllText(xmlPath) == customized,
+            "Repair existing BOM without replacing customized profile contents");
+        byte[] repaired = File.ReadAllBytes(xmlPath);
+        ensureConfig.Invoke(null, new object[] { xmlProfile, "unused.jar" });
+        Check(Convert.ToBase64String(repaired) == Convert.ToBase64String(File.ReadAllBytes(xmlPath)), "Config repair is idempotent");
+        Console.WriteLine("PASS emulator XML BOM creation and repair");
         var proxyAccount = new AccountItem { ProxyEnabled = true, ProxyHost = "127.0.0.1", ProxyPort = 1080, ProxyUsername = "fixture-user" };
         proxyAccount.SetProxyPassword("proxy-fixture-secret");
         var proxySerializer = new System.Web.Script.Serialization.JavaScriptSerializer();

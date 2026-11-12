@@ -144,6 +144,7 @@ public final class TradeConfirmationTest {
         TradeEngine engine = live.engine;
         engine.start(30000);
         live.view.market = 1;
+        live.view.animal = true;
         engine.state = TradeEngine.BUY;
         live.view.cargo = 0;
         live.view.cargoRevision = 1;
@@ -337,6 +338,14 @@ public final class TradeConfirmationTest {
         check(ok.calls==1 && live.engine.state==TradeEngine.WAIT_REPLACE,"Auto OK screenshot prompt after replacement item use");
         live.dialog(dialog,usePrompt,buttons); live.tick(beast,3300);
         check(ok.calls==1,"Duplicate confirmation is not performed twice");
+        Object repeatedUseDialog=new Object(); GameCanvas.currentDialog=repeatedUseDialog;
+        mVector repeatedUseButtons=options("Ok");
+        live.dialog(repeatedUseDialog,usePrompt,repeatedUseButtons); live.tick(beast,3350);
+        check(((iCommand)repeatedUseButtons.elementAt(0)).calls==1,
+            "Distinct server item-use step with identical text must be confirmed");
+        live.dialog(repeatedUseDialog,usePrompt,repeatedUseButtons); live.tick(beast,3370);
+        check(((iCommand)repeatedUseButtons.elementAt(0)).calls==1,
+            "Reprocessing the same item-use command cannot send confirmation twice");
         Object replaceStep=new Object(); GameCanvas.currentDialog=replaceStep;
         mVector replaceStepButtons=options("OK");
         live.dialog(replaceStep,replacementPrompt.replace(' ', '\n'),replaceStepButtons); live.tick(beast,3400);
@@ -865,7 +874,7 @@ public final class TradeConfirmationTest {
         check(Model.CRes.saveCalls-saves==2,"Two thousand update ticks persist recovery only twice over ten seconds: "+(Model.CRes.saveCalls-saves));
         live.tick(null,210000);
         check(Model.CRes.saveCalls-saves==3,"Losing animal immediately persists last known location");
-        // Uncollectable drops must not intercept the cancellation action after 40s.
+        // A timeout is not proof that cargo was lost or that drops cannot be recovered.
         live=start(); live.engine.state=TradeEngine.TO_SELL;
         beast=new MainObject(); beast.ID=9200; beast.name="Lừa vàng";
         beast.x=200; beast.y=200; beast.hp=1; beast.maxHp=100;
@@ -878,11 +887,15 @@ public final class TradeConfirmationTest {
         check(live.engine.state==TradeEngine.WAIT_NEW,"Pickup remains active just before 40s timeout");
         int cancelUses=net.potionCalls;
         live.tick(replacement,44000); live.tick(replacement,44200);
-        check(live.engine.state==TradeEngine.WAIT_RECALL && net.potionCalls==cancelUses+1,
-            "After 40s unknown cargo cancels animal despite gems still on ground");
+        check(live.engine.state==TradeEngine.WAIT_NEW && net.potionCalls==cancelUses,
+            "After 40s unknown cargo and remaining drops cannot cancel the animal");
         live.tick(null,45000);
-        check(live.engine.state==TradeEngine.TO_MARKET,"Server removal after pickup timeout restarts trip");
-        check(live.earnings.failedTrips==1 && live.earnings.successfulTrips==0,"Pickup timeout abandoning purchased cargo counts one failed trip");
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Temporary disappearance during pickup cannot restart trip");
+        check(live.earnings.failedTrips==0 && live.earnings.successfulTrips==0,"Pickup timeout is not a confirmed failed trip");
+        live.tick(null,85000);
+        check(live.engine.state==TradeEngine.RECOVER,"Missing replacement enters recovery");
+        live.tick(replacement,86000);
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Found replacement resumes pickup rather than abandoning its unverified cargo");
         live=start(); live.engine.state=TradeEngine.TO_SELL;
         beast=new MainObject(); beast.ID=9300; beast.name="Lừa vàng";
         beast.x=200; beast.y=200; beast.hp=100; beast.maxHp=100;
@@ -903,8 +916,20 @@ public final class TradeConfirmationTest {
         check(live.view.cargo==6 && live.view.full && net.potionCalls==unintendedRecalls,
             "Animal HP ending in zero cannot become zero cargo and cancel a loaded animal");
         live.menu(options("Hành trang thú"),0,-56,"Số hàng: 0/6"); live.tick(beast,4600);
-        check(live.view.cargo==0 && live.engine.state==TradeEngine.WAIT_RECALL,
-            "Actual animal menu still confirms empty cargo and permits cancellation");
+        check(live.view.cargo==-1 && live.engine.state==TradeEngine.RESYNC && net.potionCalls==unintendedRecalls,
+            "Unexpected zero inventory during escort must be rechecked before canceling loaded animal");
+        live.animalCargo("Lừa vàng",6); live.tick(beast,4800); live.tick(beast,5000);
+        check(live.view.cargo==6 && live.engine.state==TradeEngine.TO_SELL && net.potionCalls==unintendedRecalls,
+            "Fresh loaded inventory corrects delayed zero without destroying the animal");
+        live.menu(options("Hành trang thú"),0,-56,"Số hàng: 0/6"); live.tick(beast,5200);
+        check(live.engine.state==TradeEngine.RESYNC,"Recheck unexpected zero on each loaded trip");
+        live.animalCargo("Lừa vàng",0); live.tick(beast,5400);
+        check(live.engine.state==TradeEngine.RESYNC && net.potionCalls==unintendedRecalls,
+            "Duplicate zero before a fresh inventory request cannot authorize cancellation");
+        live.tick(beast,8200);
+        live.animalCargo("Lừa vàng",0); live.tick(beast,8400); live.tick(beast,8600);
+        check(live.engine.state==TradeEngine.WAIT_RECALL && net.potionCalls==unintendedRecalls+1,
+            "Fresh requested zero inventory still permits canceling a truly empty animal");
         live=start(); live.engine.state=TradeEngine.TO_SELL;
         beast=new MainObject(); beast.ID=9400; beast.name="Lừa vàng";
         beast.x=200; beast.y=200; beast.hp=1; beast.maxHp=100;
@@ -918,7 +943,7 @@ public final class TradeConfirmationTest {
         dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok"); ok=(iCommand)buttons.elementAt(0);
         live.dialog(dialog,"Bạn có muốn hủy chuyến đi buôn? Toàn bộ hàng sẽ bị mất.",buttons);
         live.tick(beast,3800);
-        check(ok.calls==1,"Explicit abandonment still automatically confirms cancellation");
+        check(ok.calls==0,"Loaded cargo must block cancellation even if a stale state requested recall");
         live=start(); live.engine.state=TradeEngine.TO_SELL;
         beast=new MainObject(); beast.ID=9500; beast.name="Lừa vàng";
         beast.x=200; beast.y=200; beast.hp=1; beast.maxHp=100;
@@ -940,6 +965,21 @@ public final class TradeConfirmationTest {
         check(live.engine.state==TradeEngine.WAIT_NEW,"Confirmed replacement still waits for cargo pickup");
         live.animalCargo("Lừa vàng",6); live.tick(replacement,8500);
         check(live.engine.state==TradeEngine.TO_SELL,"New animal with confirmed recovered cargo resumes escort");
+        live=start(); live.engine.state=TradeEngine.TO_SELL;
+        beast.hp=1; live.view.cargo=6; live.tick(beast,3000);
+        dialog=new Object(); GameCanvas.currentDialog=dialog; buttons=options("Ok");
+        live.dialog(dialog,deadAnimalPrompt,buttons); live.tick(beast,3300);
+        check(((iCommand)buttons.elementAt(0)).calls==1,"Replacement creation prompt acknowledged while old animal is still visible");
+        replacementItemUses=net.potionCalls;
+        live.tick(null,4000); live.tick(null,4500); live.tick(replacement,5000);
+        check(net.potionCalls==replacementItemUses && live.engine.state==TradeEngine.WAIT_NEW,
+            "Confirmed server-created replacement must not be canceled by a second item use during spawn gap");
+        drop=new MainObject(); drop.ID=9600; drop.typeObject=4; drop.name="Kim Cương";
+        drop.x=400; drop.y=200; GameScreen.Vecplayers.addElement(drop);
+        GameScreen.player.x=300; GameScreen.player.y=200;
+        live.tick(replacement,5500);
+        check(GameScreen.player.xStopMove<=replacement.x+35,
+            "Picking up distant gems first reunites with animal instead of walking away without a leash");
         System.out.println("PASS trade confirmation and purchasing: "+checks+" assertions");
     }
 }

@@ -45,10 +45,15 @@ public final class TradeEngine {
     private long escortAbsentAt=-1;
     private int retryState;
     private long syncRevision;
+    private boolean replacementCreatesAnimal;
+    private boolean summonRetryPending;
+    private int summonRejections;
 
     public TradeEngine(TradeConfig c, Port p) { config=c; port=p; }
     public boolean start(long now) {
         escortAbsentAt=-1;
+        replacementCreatesAnimal=false;
+        summonRetryPending=false; summonRejections=0;
         recoverState=0; replaceState=0; buyAttempts=0; replaceCooldown=0; pickupUntil=0; recoverMapArrival=0;
         if (!port.ready()) { status="Chưa xác minh giao thức máy chủ"; return false; }
         market=config.market; gem=config.gem; selectedGem=config.gem; emptyMask=0; stock=null;
@@ -72,6 +77,53 @@ public final class TradeEngine {
         if (state!=TO_MARKET) return;
         state=TO_SELL; due=now; stock=null; awaitingStock=false; sellerArriveAt=0;
         status="Tiếp tục dắt thú về bán";
+    }
+    /** The replacement item can remove and create the animal in one server update. */
+    public void onReplacementObserved(long now) {
+        if (state!=WAIT_REPLACE) return;
+        state=WAIT_NEW; deadline=now+40000; pickupUntil=now+4000; due=now;
+    }
+    public void onReplacementCreatesAnimal() {
+        if (state==WAIT_REPLACE) replacementCreatesAnimal=true;
+    }
+    /** A server rejection permits a retry; a silent/delayed spawn does not. */
+    public boolean onAnimalUseRejected(View view,long now) {
+        if (view.animal || (state!=SUMMON && state!=WAIT_NEW && state!=WAIT_REPLACE)) return false;
+        if (state==WAIT_REPLACE) {
+            state=WAIT_NEW; replacementCreatesAnimal=false;
+        }
+        if (summonRejections<2) {
+            summonRejections++; summonRetryPending=true; due=now+1500;
+            deadline=now+40000; pickupUntil=now+4000;
+            status="Máy chủ báo chưa có thú; dùng lại vật phẩm để thả thú";
+        } else {
+            summonRetryPending=false;
+            status="Máy chủ từ chối thả thú; giữ chuyến và hàng để kiểm tra";
+        }
+        return true;
+    }
+    /** Death plus dropped cargo is evidence to replace, not search for a living animal. */
+    public boolean onAnimalDiedWithCargo(long now) {
+        if (state!=TO_SELL && state!=BUY && state!=WAIT_BUY && state!=STOCK && state!=RECOVER) return false;
+        replaceState=(state==BUY || state==WAIT_BUY || state==STOCK) ? TO_MARKET : TO_SELL;
+        state=WAIT_NEW; summonRetryPending=true; summonRejections=0;
+        deadline=now+40000; pickupUntil=now+4000; due=now;
+        stock=null; awaitingStock=false; port.stopMovement();
+        return true;
+    }
+    private void recoveryTimeout(View view,long now) {
+        // A saved location is only a search hint, not proof of a loaded trip.
+        // Otherwise stale/unknown cargo keeps renewing recovery forever.
+        if (view.cargo>0 || view.full) {
+            deadline=now+180000; recoverMapArrival=0; due=now+1000;
+            status="Chưa tìm thấy thú; giữ chuyến và tiếp tục tìm tại vị trí cuối";
+            port.notifyUser(status);
+        } else {
+            port.resetLostTrip(); state=TO_MARKET; stock=null; awaitingStock=false; emptyMask=0; due=now+1000;
+            recoverState=0; recoverMapArrival=0; escortAbsentAt=-1;
+            waitAtFirstMarket=false; buyAttempts=0; saleAttempts=0;
+            status="Hết thời gian tìm thú; về bãi mua chuyến mới";
+        }
     }
     public void stop() { state=STOP; awaitingStock=false; stock=null; port.stopMovement(); status="Đã tắt"; }
     public int stockRequest() { return request; }
@@ -227,40 +279,48 @@ public final class TradeEngine {
         }
         // Escort must recover even if the adapter lost its previous-animal flag.
         // Allow a short map-loading gap, but never wait indefinitely in goSeller.
-        if ((state==TO_SELL || state==SELL) && !view.animal) {
+        if ((state==TO_SELL || state==SELL || state==BUY || state==WAIT_BUY) && !view.animal) {
+            port.stopMovement();
             if (escortAbsentAt<0) escortAbsentAt=now;
         } else escortAbsentAt=-1;
         boolean escortMissing=escortAbsentAt>=0 && now-escortAbsentAt>=2000;
         if ((view.animalMissing || escortMissing) && state!=RECOVER && state!=SUMMON && state!=WAIT_NEW && state!=WAIT_RECALL && state!=WAIT_REPLACE && state!=WAIT_SALE) {
             recoverState=state;
+            if (state==SELL) recoverState=TO_SELL;
             if (state==BUY || state==WAIT_BUY || state==STOCK) { recoverState=TO_MARKET; stock=null; awaitingStock=false; }
             state=RECOVER; deadline=now+(recoverState==TO_SELL || view.cargo>0 ? 180000 : 20000); recoverMapArrival=0; due=now;
         }
         if (state==RECOVER) {
-            if (view.animal) { state=recoverState; due=now; }
-            else if (recoverState==TO_SELL || view.cargo>0) {
+            if (view.animal) {
+                state=recoverState; due=now;
+                if (state==WAIT_NEW) { deadline=now+40000; pickupUntil=now+4000; }
+            }
+            else if (recoverState==TO_SELL || recoverState==WAIT_NEW || view.cargo>0) {
                 if (!view.inRecoveryMap) {
                     if (now>=deadline) {
-                        port.resetLostTrip(); state=TO_MARKET; stock=null; awaitingStock=false; emptyMask=0; due=now+1000;
-                        status="Không về được map tìm thú sau 3 phút; bắt đầu lại chuyến"; return;
+                        recoveryTimeout(view,now); return;
                     }
                     if (now>=due) { port.recoverPreviousMap(); due=now+1000; }
                     status="Đang về map dắt tiếp thú"; return;
                 } else {
                     if (recoverMapArrival==0) recoverMapArrival=now;
                     if (now-recoverMapArrival>=60000 || now>=deadline) {
-                        port.resetLostTrip(); state=TO_MARKET; stock=null; awaitingStock=false; emptyMask=0; due=now+1000;
-                        status="Không tìm thấy thú tại map cũ; bắt đầu lại chuyến"; return;
+                        recoveryTimeout(view,now); return;
                     }
                     if (now>=due) { port.recoverPreviousMap(); due=now+1000; }
                     status="Đang tìm thú trong map"; return;
                 }
             }
             else if (now>=deadline) {
-                port.resetLostTrip(); state=TO_MARKET; stock=null; awaitingStock=false; emptyMask=0; due=now+1000;
-                status="Không tìm thấy thú sau 20s; bắt đầu lại chuyến"; return;
+                recoveryTimeout(view,now); return;
             }
             else { if (now>=due) { port.recoverPreviousMap(); due=now+1000; } status="Lùi map tìm thú (20s)"; return; }
+        }
+        // The map-loading grace period must not send purchases or retries
+        // against an animal that has already disappeared from the live view.
+        if (!view.animal && (state==BUY || state==WAIT_BUY || state==TO_SELL || state==SELL)) {
+            status="Chờ tìm lại thú trước khi giao dịch";
+            return;
         }
         // A confirmed empty animal must not be escorted to a seller. Do not
         // mistake unknown cargo (-1) or gems awaiting pickup for an empty trip.
@@ -277,6 +337,8 @@ public final class TradeEngine {
                 && (state==BUY || state==WAIT_BUY || state==STOCK || state==TO_SELL)) {
             previousCargo=view.cargo>0 ? view.cargo : (previousCargo>0 ? previousCargo : TradeConfig.MAX_CARGO[config.animal]);
             replaceState=state==TO_SELL ? TO_SELL : TO_MARKET;
+            replacementCreatesAnimal=false;
+            summonRetryPending=false; summonRejections=0;
             awaitingStock=false; stock=null; state=REPLACE; due=now; port.stopMovement();
             replaceCooldown=now+30000;
         }
@@ -311,10 +373,12 @@ public final class TradeEngine {
                 break;
             case SUMMON:
                 if (view.animal) {
+                    summonRetryPending=false;
                     if (view.cargo>0) state=TO_SELL; else state=BUY;
                     emptyMask=0;
                     due=now;
                 }
+                else if (summonRetryPending) { summonRetryPending=false; port.summon(config.animal); }
                 else if (now>=deadline) resync(TO_MARKET,view,"Chưa xác nhận thả thú",now);
                 break;
             case BUY:
@@ -376,7 +440,15 @@ public final class TradeEngine {
             case REPLACE:
                 port.recall(); state=WAIT_REPLACE; deadline=now+10000; break;
             case WAIT_REPLACE:
-                if (!view.animal) { port.summon(config.animal); state=WAIT_NEW; deadline=now+40000; pickupUntil=now+4000;
+                if (!view.animal) {
+                    if (!replacementCreatesAnimal) port.summon(config.animal);
+                    else {
+                        // The confirmation text is not a spawn acknowledgement.
+                        // If the server only removed the old animal, explicitly
+                        // use its item after allowing a short spawn-packet gap.
+                        summonRetryPending=true; due=now+3000;
+                    }
+                    state=WAIT_NEW; deadline=now+40000; pickupUntil=now+4000;
                     status="Đổi thú; chờ thú mới và nhặt lại đá quý";
                 } else if (now>=deadline) {
                     if (view.animal && (view.cargo>0 || view.full)) {
@@ -387,6 +459,11 @@ public final class TradeEngine {
                 break;
             case WAIT_NEW:
                 status="Chờ thú mới nhặt lại đá quý";
+                if (view.animal) summonRetryPending=false;
+                if (summonRetryPending) {
+                    summonRetryPending=false; port.summon(config.animal);
+                    status="Thả thú mới để nhặt lại đá quý";
+                }
                 if (view.animal && !view.gemDrops && now>=pickupUntil && (view.cargo>0 || view.full)) {
                     replaceCooldown=now+30000;
                     state=replaceState; due=now;
@@ -395,12 +472,14 @@ public final class TradeEngine {
                 if (view.gemDrops) pickupUntil=now+2000;
                 if (now>=deadline) {
                     if (!view.animal) {
-                        port.stopMovement(); port.resetLostTrip();
-                        state=TO_MARKET; due=now+1000; stock=null; awaitingStock=false;
-                        emptyMask=0; waitAtFirstMarket=false; recoverState=0;
-                        saleAttempts=0; buyAttempts=0; returnToMarketAfterRecall=false;
-                        status="Không còn thú buôn; về bãi mua chuyến mới";
-                    } else if (view.cargo<=0 && !view.full) {
+                        port.stopMovement(); recoverState=WAIT_NEW; state=RECOVER;
+                        deadline=now+180000; recoverMapArrival=0; due=now;
+                        status="Chưa thấy thú mới; tìm lại thú và giữ chuyến";
+                    } else if (view.cargo<0 || view.gemDrops) {
+                        // Unknown inventory and visible drops are not proof of loss.
+                        deadline=now+40000;
+                        status="Tiếp tục nhặt và xác minh hàng; chưa hủy thú";
+                    } else if (view.cargo==0 && !view.full) {
                         port.stopMovement(); returnToMarketAfterRecall=true;
                         stock=null; awaitingStock=false; emptyMask=0; waitAtFirstMarket=false;
                         recoverState=0; saleAttempts=0; buyAttempts=0;

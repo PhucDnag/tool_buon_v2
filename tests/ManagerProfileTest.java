@@ -4,6 +4,12 @@ import org.microemu.app.Config;
 /** Run in separate JVMs against the bundled emulator, like real game instances. */
 public final class ManagerProfileTest {
     public static void main(String[] args) throws Exception {
+        String xml="<?xml version=\"1.0\" encoding=\"UTF-8\"?><config/>";
+        boolean rejectedBom=false;
+        try { new nanoxml.XMLElement().parseString("\ufeff"+xml); }
+        catch (nanoxml.XMLParseException expectedError) { rejectedBom=true; }
+        if (!rejectedBom) throw new AssertionError("Expected bundled NanoXML to reproduce BOM failure");
+        new nanoxml.XMLElement().parseString(xml);
         System.setProperty("user.home",new File(args[0]).getCanonicalPath());
         ManagerLauncher.initializeProfile(new String[]{"--resizableDevice","300","300","--id",args[1],"game.jar"});
         File expected=new File(args[0],".microemulator/"+args[1]).getCanonicalFile();

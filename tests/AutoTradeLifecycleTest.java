@@ -48,7 +48,218 @@ public final class AutoTradeLifecycleTest {
         public void notifyUser(String s){}
     }
     public static void main(String[] args) {
+        // A persisted location with unknown/empty cargo must not renew the
+        // search forever and prevent the next summon/purchase cycle.
+        for (int savedCargo=-1;savedCargo<=0;savedCargo++) {
+            TradeConfig recoveryConfig=new TradeConfig(); recoveryConfig.animal=2;
+            LiveTrade recovered=live(recoveryConfig,"Hố Tử Thần");
+            recovered.toggle(1100);
+            TradeRecovery.save(100,"Hố Tử Thần",200,200,savedCargo,0,0,2,1200);
+            recovered.toggle(1300); recovered.tick(null,2000);
+            check(recovered.engine.state==TradeEngine.RECOVER && recovered.view.inRecoveryMap,
+                "Saved location starts a bounded search in the last animal map");
+            recovered.tick(null,61000);
+            check(recovered.engine.state==TradeEngine.RECOVER,"Allow full sixty-second search before restarting");
+            recovered.tick(null,62000);
+            check(recovered.engine.state==TradeEngine.TO_MARKET && !recovered.hasLostTrip()
+                    && TradeRecovery.load(100,62000)==null,
+                "Unknown/empty saved cargo expires and clears all stale recovery evidence");
+            recovered.view.connected=false; recovered.engine.tick(recovered.view,62100);
+            recovered.tick(null,63000);
+            check(recovered.engine.state==TradeEngine.TO_MARKET,
+                "Reconnect cannot restore expired recovery state");
+            GameCanvas.loadmap.idMap=TradeConfig.MARKET_MAP_IDS[0];
+            GameCanvas.loadmap.nameMap=TradeConfig.MARKETS[0];
+            MainObject merchant=animal("Dylan"); merchant.ID=5; merchant.typeObject=2;
+            GameScreen.Vecplayers.addElement(merchant);
+            Item item=new Item(); item.Id=242; item.ItemCatagory=4;
+            item.numPotion=1; item.itemName="Bò vàng"; Item.VecInvetoryPlayer.addElement(item);
+            recovered.tick(null,64000);
+            merchant.strChatPopup="Ta chỉ còn 3 viên kim cương, 3 viên riuby, 3 viên saphia";
+            recovered.chat(merchant); recovered.tick(null,65000);
+            check(recovered.engine.state==TradeEngine.SUMMON,"Expired recovery resumes stock check and summon");
+            MainObject cow=animal("Bò vàng");
+            recovered.tick(cow,66000); recovered.tick(cow,67000);
+            recovered.menu(buttons("Mua Kim Cương",null),2,5,""); recovered.tick(cow,68000);
+            mVector goods=new mVector(); Item gem=new Item();
+            gem.Id=81; gem.ItemCatagory=4; gem.itemName="Kim Cương"; goods.addElement(gem);
+            int purchases=GlobalService.gI().buyCalls;
+            recovered.shop(goods,0,0); recovered.tick(cow,69000);
+            check(GlobalService.gI().buyCalls==purchases+1,
+                "Stale recovery regression reaches an actual gem purchase request");
+        }
+        {
+            TradeConfig recoveryConfig=new TradeConfig();
+            LiveTrade expired=live(recoveryConfig,"Hố Tử Thần");
+            expired.tick(animal("Lừa vàng"),2000);
+            expired.engine.state=TradeEngine.TO_MARKET; expired.toggle(2100);
+            TradeRecovery.clear(); expired.toggle(2200);
+            check(!expired.hasLostTrip(),"Fresh start cannot reuse old in-memory location without a recovery record");
+
+            LiveTrade visible=live(recoveryConfig,TradeConfig.MARKETS[0]);
+            MainObject cow=animal("Lừa vàng"); visible.tick(cow,2000);
+            visible.engine.state=TradeEngine.TO_MARKET; visible.toggle(2100);
+            TradeRecovery.save(100,TradeConfig.MARKETS[0],200,200,2,0,0,0,2200);
+            visible.toggle(2300); visible.tick(cow,2400);
+            check(visible.engine.state==TradeEngine.STOCK,
+                "Restored visible partial load at buying market continues loading instead of escorting");
+        }
+        Port missingPort=new Port();
+        TradeEngine missingEngine=new TradeEngine(new TradeConfig(),missingPort);
+        TradeEngine.View missingView=new TradeEngine.View(); missingView.market=0;
+        missingEngine.start(1000); missingEngine.state=TradeEngine.BUY;
+        missingEngine.tick(missingView,2000);
+        check(missingPort.buys==0 && missingEngine.state==TradeEngine.BUY,
+            "Missing animal cannot trigger a purchase during map-loading grace");
+        missingEngine.tick(missingView,4100);
+        check(missingPort.buys==0 && missingEngine.state==TradeEngine.RECOVER,
+            "Buying without an animal recovers even without adapter missing flag");
+        missingEngine.start(5000); missingView.animal=true; missingEngine.state=TradeEngine.BUY;
+        missingEngine.tick(missingView,6000);
+        check(missingPort.buys==1,"Visible animal can begin purchase");
+        missingView.animal=false; missingEngine.tick(missingView,17000);
+        check(missingPort.buys==1,"Expired buy deadline cannot retry after animal disappears");
         GlobalService net=GlobalService.gI();
+        {
+            TradeConfig config=new TradeConfig(); config.animal=2;
+            LiveTrade noItem=live(config,TradeConfig.MARKETS[0]);
+            MainObject merchant=animal("Dylan"); merchant.ID=5; merchant.typeObject=2;
+            GameScreen.Vecplayers.addElement(merchant);
+            noItem.tick(null,2000);
+            merchant.strChatPopup="Ta chỉ còn 3 viên kim cương, 3 viên riuby, 3 viên saphia";
+            noItem.chat(merchant);
+            int npcCalls=net.shopCalls,uses=net.potionCalls;
+            noItem.tick(null,3000); noItem.tick(null,16000); noItem.tick(null,20000);
+            check(noItem.engine.state==TradeEngine.SUMMON && net.shopCalls==npcCalls && net.potionCalls==uses,
+                "Missing animal item waits for inventory without asking merchant or looping resync");
+            check(noItem.engine.status.indexOf("vật phẩm")>=0,"HUD reports actual missing animal item blocker");
+            noItem.serverText("Ta không thấy con vật buôn của ngươi"); noItem.tick(null,21000);
+            check(noItem.intent==LiveTrade.SUMMON,"Unrelated NPC response is not an item-use rejection when no item was used");
+            Item item=new Item(); item.Id=242; item.ItemCatagory=4; item.numPotion=1; item.itemName="Bò vàng";
+            Item.VecInvetoryPlayer.addElement(item); noItem.tick(null,22000);
+            check(net.potionCalls==uses+1 && net.lastPotion==242,"Inventory arrival resumes pending summon automatically");
+
+            // Real log: low HP at map 42, a portal gap at map 22, same animal
+            // appears there before the replacement confirmation/removal.
+            LiveTrade portal=live(config,"Đèo Hoang Sơ"); GameCanvas.loadmap.idMap=42;
+            Item.VecInvetoryPlayer.addElement(item);
+            MainObject old=animal("Bò vàng"); old.ID=8468; old.hp=189600; old.maxHp=400000;
+            portal.engine.state=TradeEngine.TO_SELL; portal.view.cargo=24; portal.view.full=true;
+            portal.tick(old,2000); uses=net.potionCalls;
+            GameCanvas.loadmap.idMap=22; GameCanvas.loadmap.nameMap="Vực Lún";
+            old.isRemove=true; portal.tick(null,2200);
+            check(portal.engine.state==TradeEngine.WAIT_REPLACE && portal.view.cargo==24 && net.potionCalls==uses,
+                "Portal loading gap cannot be mistaken for replacement removal or use item twice");
+            old.isRemove=false; portal.tick(old,2400);
+            check(portal.engine.state==TradeEngine.WAIT_REPLACE && portal.view.cargo==24,
+                "Same animal arriving on new map preserves replacement phase and loaded cargo");
+            Object prompt=new Object(); GameCanvas.currentDialog=prompt;
+            portal.dialog(prompt,"Con vật buôn của bạn đang ở map Vực Lún. Bạn có muốn hủy con thú cũ để tạo con thú mới không ?",buttons("Ok",null));
+            portal.tick(old,2600);
+            old.hp=0; old.isStop=true; portal.tick(null,2800);
+            check(portal.engine.state==TradeEngine.WAIT_NEW && net.potionCalls==uses,
+                "Confirmed removal allows spawn grace without redundant item use");
+            portal.tick(null,5900);
+            check(net.potionCalls==uses+1,"Missing replacement spawns after grace even when old animal crossed a portal");
+            MainObject replacement=animal("Bò vàng"); replacement.ID=8470; replacement.hp=400000; replacement.maxHp=400000;
+            portal.tick(replacement,6100);
+            portal.animalCargo("Bò vàng",24); portal.tick(replacement,7100);
+            check(portal.engine.state==TradeEngine.TO_SELL && portal.view.cargo==24,
+                "Portal replacement resumes escort after confirmed pickup");
+        }
+        {
+        // Rejected item use must not leave WAIT_NEW waiting for a spawn that
+        // the server explicitly said did not happen.
+        TradeConfig cowConfig=new TradeConfig(); cowConfig.animal=2;
+        LiveTrade rejected=live(cowConfig,TradeConfig.MARKETS[0]);
+        Item cowItem=new Item(); cowItem.Id=242; cowItem.ItemCatagory=4;
+        cowItem.numPotion=1; cowItem.itemName="Bò vàng"; Item.VecInvetoryPlayer.addElement(cowItem);
+        rejected.tick(null,2000); rejected.engine.state=TradeEngine.WAIT_NEW;
+        rejected.summon(2); rejected.tick(null,2100);
+        int uses=net.potionCalls;
+        Object rejectDialog=new Object(); GameCanvas.currentDialog=rejectDialog;
+        rejected.dialog(rejectDialog,"Ta không thấy con vật buôn của ngươi",buttons("Ok",null));
+        rejected.tick(null,2200);
+        check(GameCanvas.currentDialog==null && rejected.intent==0 && rejected.engine.state==TradeEngine.WAIT_NEW,
+            "Item rejection closes error and retains replacement pickup phase");
+        rejected.tick(null,3600);
+        check(net.potionCalls==uses,"Rejected item retry is paced");
+        rejected.tick(null,3800);
+        check(net.potionCalls==uses+1 && net.lastPotion==242,"Explicit rejection retries cow item without querying nonexistent animal");
+        rejected.tick(null,8000);
+        check(net.potionCalls==uses+1,"Silent delayed spawn cannot trigger repeated item use");
+        MainObject newCow=animal("Bò vàng"); newCow.ID=243;
+        MainObject spilled=animal("Saphia"); spilled.ID=244; spilled.typeObject=4;
+        GameScreen.Vecplayers.addElement(spilled);
+        int pickups=net.getItemMapCalls;
+        rejected.tick(newCow,9000);
+        check(net.getItemMapCalls>pickups && net.potionCalls==uses+1,
+            "Replacement cow picks dropped gems without being used/cancelled again");
+
+        // Death and drop packets may arrive on different ticks, outside a market.
+        LiveTrade died=live(cowConfig,"Vực Lún");
+        Item.VecInvetoryPlayer.addElement(cowItem);
+        MainObject dyingCow=animal("Bò vàng");
+        died.engine.state=TradeEngine.TO_SELL; died.view.cargo=24; died.view.full=true;
+        died.tick(dyingCow,2000); dyingCow.hp=0;
+        died.tick(null,2100);
+        GameScreen.Vecplayers.addElement(spilled); uses=net.potionCalls;
+        died.tick(null,2500);
+        check(died.engine.state==TradeEngine.WAIT_NEW && net.potionCalls==uses+1 && net.lastPotion==242,
+            "Observed dead cow and delayed drops summon replacement outside market");
+        check(died.view.cargo==-1 && !died.view.full,"Dropped full load cannot masquerade as cargo on new cow");
+        uses=net.potionCalls;
+        died.serverText("Ta không thấy con vật buôn của ngươi"); died.tick(null,2600); died.tick(null,4200);
+        died.serverText("Ta không thấy con vật buôn của ngươi"); died.tick(null,4300); died.tick(null,5900);
+        died.serverText("Ta không thấy con vật buôn của ngươi"); died.tick(null,6000); died.tick(null,8000);
+        check(net.potionCalls==uses+2,"Repeated explicit rejection allows only two paced item retries");
+        LiveTrade vanished=live(cowConfig,"Vực Lún"); Item.VecInvetoryPlayer.addElement(cowItem);
+        MainObject healthyCow=animal("Bò vàng");
+        vanished.engine.state=TradeEngine.TO_SELL; vanished.view.cargo=24; vanished.view.full=true;
+        vanished.tick(healthyCow,2000); GameScreen.Vecplayers.addElement(spilled); uses=net.potionCalls;
+        vanished.tick(null,2100); vanished.tick(null,4500);
+        check(net.potionCalls==uses && vanished.engine.state==TradeEngine.RECOVER,
+            "Other ground gems plus a map-loading gap cannot authorize replacing an unconfirmed dead cow");
+        }
+        {
+            TradeConfig config=new TradeConfig(); config.animal=2;
+            LiveTrade replacementFlow=live(config,"Vực Lún");
+            Item item=new Item(); item.Id=242; item.ItemCatagory=4; item.numPotion=1; item.itemName="Bò vàng";
+            Item.VecInvetoryPlayer.addElement(item);
+            MainObject oldCow=animal("Bò vàng"); oldCow.ID=8418; oldCow.hp=172035; oldCow.maxHp=400000;
+            replacementFlow.view.cargo=24; replacementFlow.view.full=true; replacementFlow.engine.state=TradeEngine.TO_SELL;
+            replacementFlow.tick(oldCow,2000);
+            Object prompt=new Object(); GameCanvas.currentDialog=prompt;
+            replacementFlow.dialog(prompt,"Con vật buôn của bạn đang ở map Vực Lún. Bạn có muốn hủy con thú cũ để tạo con thú mới không ?",buttons("Ok",null));
+            replacementFlow.tick(oldCow,2100);
+            int itemUses=net.potionCalls;
+            oldCow.hp=0; oldCow.isStop=true; replacementFlow.tick(null,2300);
+            check(replacementFlow.engine.state==TradeEngine.WAIT_NEW && net.potionCalls==itemUses,
+                "Replacement allows a short spawn grace period after old cow disappears");
+            replacementFlow.tick(null,5200);
+            check(net.potionCalls==itemUses,"Do not reuse item during initial spawn grace");
+            replacementFlow.tick(null,5400);
+            check(net.potionCalls==itemUses+1 && net.lastPotion==242 && replacementFlow.intent==LiveTrade.SUMMON,
+                "Log regression: absent replacement must trigger cow item without manual input");
+            itemUses=net.potionCalls;
+            replacementFlow.tick(null,10000); replacementFlow.tick(null,15000);
+            check(net.potionCalls==itemUses,"Pending replacement summon is not repeatedly toggled");
+            MainObject newCow=animal("Bò vàng"); newCow.ID=8421; newCow.hp=400000; newCow.maxHp=400000;
+            replacementFlow.tick(newCow,20000);
+            check(replacementFlow.view.cargo==-1 && !replacementFlow.view.full && replacementFlow.engine.state==TradeEngine.WAIT_NEW,
+                "Log regression: new cow must not inherit old full flag and escort unknown cargo");
+            replacementFlow.tick(newCow,43000);
+            check(replacementFlow.engine.state==TradeEngine.WAIT_NEW && net.potionCalls==itemUses,
+                "Unknown replacement inventory still waits after timeout without cancellation");
+            MainObject gem=animal("Saphia"); gem.typeObject=4; gem.ID=8422; GameScreen.Vecplayers.addElement(gem);
+            int pickups=net.getItemMapCalls; replacementFlow.tick(newCow,44000);
+            check(net.getItemMapCalls>pickups,"Unverified replacement continues collecting visible cargo");
+            gem.isRemove=true;
+            check(replacementFlow.animalCargo("Bò vàng",24),"Accept authoritative new cow inventory");
+            replacementFlow.tick(newCow,47000);
+            check(replacementFlow.engine.state==TradeEngine.TO_SELL && replacementFlow.view.cargo==24,
+                "Only new cow inventory confirmation releases replacement escort");
+        }
         MainObject beast=animal("Lừa vàng");
         String missingText="Ta không thấy con vật buôn của ngươi";
         check(TradeSignals.animalNotFound(missingText),"Recognize exact screenshot rejection");
@@ -62,12 +273,12 @@ public final class AutoTradeLifecycleTest {
         check(missingSale.view.cargo==6 && missingSale.earnings.gold==0 && missingSale.intent==0,
             "Rejection preserves cargo and clears sale action without counting income");
         missingSale.tick(null,65000);
-        check(missingSale.engine.state==TradeEngine.TO_MARKET && GameCanvas.currentDialog==null,
-            "Unsuccessful search returns to market without a blocking error popup");
+        check(missingSale.engine.state==TradeEngine.RECOVER && GameCanvas.currentDialog==null && missingSale.earnings.failedTrips==0,
+            "Search timeout preserves known loaded trip without counting failure");
         missingDialog=new Object(); GameCanvas.currentDialog=missingDialog;
         missingSale.dialog(missingDialog,missingText,buttons("Ok",null)); missingSale.tick(null,65100);
-        check(GameCanvas.currentDialog==null && missingSale.engine.state==TradeEngine.TO_MARKET,
-            "Late informational rejection cannot block or restart market navigation");
+        check(GameCanvas.currentDialog==null && missingSale.engine.state==TradeEngine.RECOVER,
+            "Late informational rejection cannot erase ongoing recovery");
         missingSale=sale(beast); missingDialog=new Object(); GameCanvas.currentDialog=missingDialog;
         missingSale.dialog(missingDialog,missingText,buttons("Ok",null)); missingSale.tick(beast,4100);
         check(GameCanvas.currentDialog==null && missingSale.engine.state==TradeEngine.RESYNC,
@@ -246,6 +457,41 @@ public final class AutoTradeLifecycleTest {
         check(live.animalCargo("Lừa vàng",6),"Receive refreshed inventory after interrupted escort");
         live.tick(beast,4100);
         check(live.earnings.failedTrips==0,"Re-reading unchanged inventory cannot count as buying a new trip");
+        live=live(new TradeConfig(),"Sa Mạc");
+        live.view.cargo=6; live.view.full=true; live.engine.state=TradeEngine.TO_SELL;
+        beast.hp=1; live.tick(beast,2000);
+        check(live.engine.state==TradeEngine.WAIT_REPLACE,"Low HP starts replacement");
+        MainObject replacement=animal("Lừa vàng"); replacement.ID=71;
+        int potions=net.potionCalls;
+        live.tick(replacement,3000);
+        check(live.engine.state==TradeEngine.WAIT_NEW && live.view.cargo==-1 && !live.view.full,
+            "Atomic replacement waits for real new inventory instead of retaining old full cargo");
+        check(net.potionCalls==potions,"Atomic replacement must not use the item again to cancel the new animal");
+        live.tick(replacement,44000);
+        check(live.engine.state==TradeEngine.WAIT_NEW,"Inventory delay cannot destroy replacement after 40s");
+        beast.hp=100;
+
+        live=live(new TradeConfig(),"Sa Mạc");
+        live.view.cargo=6; live.engine.state=TradeEngine.TO_SELL; live.tick(beast,2000);
+        GameScreen.player.posTransRoad=new short[]{1,2,3};
+        live.tick(null,2100);
+        check(GameScreen.player.posTransRoad==null,"Stop old road immediately during the missing-animal grace period");
+        live.tick(null,4300);
+        live.tick(beast,5000);
+        GameCanvas.loadmap.idMap=78; GameCanvas.loadmap.nameMap="Đồi Cát";
+        live.tick(beast,6000);
+        live.tick(null,6100); live.tick(null,8300);
+        check(live.view.inRecoveryMap && live.lastBeastMap.equals("Đồi Cát"),
+            "Second disappearance uses latest sighting, not stale first recovery map");
+        live.tick(null,200000);
+        check(live.engine.state==TradeEngine.RECOVER && live.earnings.failedTrips==0,
+            "Long route/search timeout cannot erase a known loaded trip");
+
+        live=live(new TradeConfig(),"Sa Mạc");
+        live.view.cargo=6; live.engine.state=TradeEngine.TO_SELL; live.tick(beast,2000);
+        live.toggle(3000); live.toggle(4000); live.tick(null,25000);
+        check(live.engine.state==TradeEngine.RECOVER && live.hasLostTrip() && live.earnings.failedTrips==0,
+            "Toggle resume timeout searches saved animal instead of abandoning it");
         System.out.println("PASS automatic trade lifecycle: "+checks+" assertions");
     }
 }

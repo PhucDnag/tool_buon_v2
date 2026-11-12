@@ -47,9 +47,13 @@ namespace PhucHsoManager
     {
         public static void Write(string path, string text)
         {
+            Write(path, text, Encoding.UTF8);
+        }
+        public static void Write(string path, string text, Encoding encoding)
+        {
             string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try {
-                File.WriteAllText(temp, text, Encoding.UTF8);
+                File.WriteAllText(temp, text, encoding);
                 if (File.Exists(path)) File.Replace(temp, path, null);
                 else File.Move(temp, path);
             } finally { if (File.Exists(temp)) File.Delete(temp); }
@@ -1257,16 +1261,44 @@ namespace PhucHsoManager
             // Keep secondary settings in the edit dialog; preserve column indices.
             colId.Visible = colDisplayName.Visible = colPass.Visible = colTrade.Visible = colRestart.Visible = colNotes.Visible = false;
             colSelect.HeaderText = "Chọn";
-            colSelect.Width = 48;
+            colSelect.Width = 36;
             colSelect.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            DataGridViewColumn[] flexibleColumns = { colUser, colServer, colSlot, colAutoTrade, colStatus, colUptime };
-            float[] weights = { 26, 18, 12, 12, 20, 12 };
-            int[] minimumWidths = { 140, 105, 80, 85, 145, 85 };
+            colSlot.HeaderText = "NV";
+            colAutoTrade.HeaderText = "Auto";
+            dgvAccounts.Columns["ProxyStatus"].HeaderText = "Proxy";
+            dgvAccounts.Columns["TradeGold"].HeaderText = "Vàng bán";
+            dgvAccounts.Columns["SuccessfulTrips"].HeaderText = "Thành công";
+            dgvAccounts.Columns["FailedTrips"].HeaderText = "Chưa xong";
+            DataGridViewColumn[] flexibleColumns = { colUser, colServer, colSlot, colAutoTrade, colStatus, colUptime,
+                dgvAccounts.Columns["ProxyStatus"], dgvAccounts.Columns["TradeGold"],
+                dgvAccounts.Columns["SuccessfulTrips"], dgvAccounts.Columns["FailedTrips"] };
+            float[] weights = { 240, 100, 45, 50, 110, 80, 70, 115, 65, 70 };
+            int[] minimumWidths = { 110, 70, 40, 44, 84, 64, 56, 84, 52, 64 };
             for (int i = 0; i < flexibleColumns.Length; i++) {
                 flexibleColumns[i].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
                 flexibleColumns[i].FillWeight = weights[i];
                 flexibleColumns[i].MinimumWidth = minimumWidths[i];
             }
+            foreach (string name in new[] { "TradeGold", "SuccessfulTrips", "FailedTrips" }) {
+                dgvAccounts.Columns[name].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                dgvAccounts.Columns[name].DefaultCellStyle.Padding = new Padding(0, 0, 6, 0);
+                dgvAccounts.Columns[name].HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
+            }
+            dgvAccounts.Columns["ProxyStatus"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dgvAccounts.Columns["ProxyStatus"].HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            colSlot.ToolTipText = "Nhân vật được chọn";
+            colAutoTrade.ToolTipText = "Bật / tắt tự động đi buôn";
+            dgvAccounts.Columns["TradeGold"].ToolTipText = "Tổng vàng bán hàng, chưa trừ vốn";
+            dgvAccounts.Columns["SuccessfulTrips"].ToolTipText = "Số chuyến bán hàng thành công";
+            dgvAccounts.Columns["FailedTrips"].ToolTipText = "Số chuyến chưa thành công";
+            dgvAccounts.CellToolTipTextNeeded += delegate(object sender, DataGridViewCellToolTipTextNeededEventArgs e) {
+                if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+                AccountItem account = dgvAccounts.Rows[e.RowIndex].DataBoundItem as AccountItem;
+                if (account == null) return;
+                if (e.ColumnIndex == 3) e.ToolTipText = account.Username;
+                else if (e.ColumnIndex == 10) e.ToolTipText = account.IsRunning ? "Đang chạy — PID: " + account.Process.Id : "Đã dừng";
+                else if (dgvAccounts.Columns[e.ColumnIndex].Name == "ProxyStatus") e.ToolTipText = account.ProxyStatus ?? "";
+            };
             colSlot.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             colUptime.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             colSelect.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter;
@@ -1497,7 +1529,7 @@ namespace PhucHsoManager
             {
                 if (acc.IsRunning)
                 {
-                    e.Value = string.Format("● Đang chạy ({0})", acc.Process.Id);
+                    e.Value = "● Đang chạy";
                     e.CellStyle.ForeColor = Color.FromArgb(46, 125, 50);
                 }
                 else
@@ -1505,6 +1537,16 @@ namespace PhucHsoManager
                     e.Value = "○ Đã dừng";
                     e.CellStyle.ForeColor = Color.FromArgb(158, 158, 158);
                 }
+            }
+
+            if (dgvAccounts.Columns[e.ColumnIndex].Name == "ProxyStatus")
+            {
+                string proxy = acc.ProxyStatus ?? "";
+                bool proxyError = proxy.StartsWith("Lỗi", StringComparison.OrdinalIgnoreCase);
+                e.Value = !acc.ProxyEnabled ? "Tắt" : proxyError ? "Lỗi"
+                    : proxy.StartsWith("Đã nối", StringComparison.OrdinalIgnoreCase) ? "Đã nối" : "Chờ nối";
+                if (acc.ProxyEnabled && proxyError) e.CellStyle.ForeColor = Color.Firebrick;
+                e.FormattingApplied = true;
             }
 
             // Trade gold column (col index 13)
@@ -1618,7 +1660,7 @@ namespace PhucHsoManager
             isBatchLaunching = false;
         }
 
-        private void EnsureProfileConfig(string profileDir, string gameJar)
+        private static void EnsureProfileConfig(string profileDir, string gameJar)
         {
             try
             {
@@ -1641,7 +1683,15 @@ namespace PhucHsoManager
                         "\t\t</device>\n" +
                         "\t</devices>\n" +
                         "</config>\n";
-                    File.WriteAllText(cfgFile, xml, Encoding.UTF8);
+                    AtomicFile.Write(cfgFile, xml, new UTF8Encoding(false));
+                }
+                else
+                {
+                    // NanoXML receives a character reader and does not strip
+                    // the UTF-8 BOM written by older manager builds.
+                    byte[] bytes = File.ReadAllBytes(cfgFile);
+                    if (bytes.Length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf)
+                        AtomicFile.Write(cfgFile, Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3), new UTF8Encoding(false));
                 }
 
                 // Check migration from legacy nested folder if present

@@ -250,7 +250,8 @@ public final class TradeTests {
         }
         // Unknown sale outcomes must not wait forever or start another trip.
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
-        e.state=TradeEngine.SELL; v.atSeller=true; e.tick(v,1000);
+        e.state=TradeEngine.SELL; v.atSeller=true; v.animal=true; e.tick(v,1000);
+        v.animal=false;
         e.tick(v,40000);
         check(e.state==TradeEngine.RESYNC && p.sells==1,"Unknown sale outcome enters synchronization without repeating sale");
         TradeConfig fastSale=new TradeConfig(); fastSale.saleTimeoutMs=4000; fastSale.maxSaleAttempts=2;
@@ -266,7 +267,9 @@ public final class TradeTests {
         v.gemDrops=true; v.cargo=1; e.tick(v,8000);
         check(e.state==TradeEngine.WAIT_NEW,"Partial pickup keeps collecting remaining drops");
         e.onActionProgress(41000); e.tick(v,42000);
-        check(e.state==TradeEngine.TO_SELL,"Uncollectable drops cannot stop a trip with recovered cargo");
+        check(e.state==TradeEngine.WAIT_NEW,"Visible remaining drops must not be abandoned at pickup timeout");
+        v.gemDrops=false; e.tick(v,45000);
+        check(e.state==TradeEngine.TO_SELL,"Resume delivery after remaining drops disappear");
         for (int outcome=0;outcome<3;outcome++) {
             p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
             v.animal=true; v.cargo=6; v.hp=1; v.maxHp=100; e.state=TradeEngine.TO_SELL;
@@ -276,16 +279,11 @@ public final class TradeTests {
             check(e.state==TradeEngine.WAIT_NEW,"Keep checking pickup until the full 40 seconds elapse");
             e.onActionProgress(41999); e.tick(v,42000);
             if (outcome==0) {
-                check(e.state==TradeEngine.TO_MARKET,"Missing replacement animal starts a new trip after grace period");
-                e.tick(v,44000);
-                e.onStock(0,e.stockRequest(),"Kim Cương: 5",44100); e.tick(v,45000);
-                check(e.state==TradeEngine.SUMMON,"Lost trip returns to stock check and summon");
+                check(e.state==TradeEngine.RECOVER,"Missing replacement animal must be searched for before restarting");
             } else {
-                check(e.state==TradeEngine.RECALL,"Empty or unconfirmed replacement is recalled after 40 seconds even with drops");
-                e.tick(v,42150);
-                check(e.state==TradeEngine.WAIT_RECALL && p.recalls==2,"Send cancellation and wait for server removal before restarting");
-                v.animal=false; e.tick(v,43000);
-                check(e.state==TradeEngine.TO_MARKET,"Confirmed recall starts new trip");
+                check(e.state==TradeEngine.WAIT_NEW && p.recalls==1,"Unknown cargo or remaining drops cannot authorize cancellation");
+                v.gemDrops=false; v.cargo=-1; e.tick(v,83000);
+                check(e.state==TradeEngine.WAIT_NEW && p.recalls==1,"Unknown cargo remains protected after repeated timeouts");
             }
         }
         p=new Port(); v=new TradeEngine.View(); e=begin(p,v);
