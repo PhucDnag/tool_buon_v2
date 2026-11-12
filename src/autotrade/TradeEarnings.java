@@ -9,7 +9,10 @@ public final class TradeEarnings {
         if (hasCargo) loaded=true;
         if (loaded && escorting) departed=true;
     }
-    public void buyingAgain() { if (departed) abandon(); }
+    public void buyingAgain() { buyingAgain(false); }
+    public void buyingAgain(boolean emptyCargo) {
+        if (departed || loaded && emptyCargo) abandon();
+    }
     public void abandon() {
         if (loaded) failedTrips++;
         loaded=false; departed=false;

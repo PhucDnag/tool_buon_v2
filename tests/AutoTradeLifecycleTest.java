@@ -272,13 +272,16 @@ public final class AutoTradeLifecycleTest {
             "Missing animal sale rejection closes popup and immediately searches previous location");
         check(missingSale.view.cargo==6 && missingSale.earnings.gold==0 && missingSale.intent==0,
             "Rejection preserves cargo and clears sale action without counting income");
-        missingSale.tick(null,65000);
-        check(missingSale.engine.state==TradeEngine.RECOVER && GameCanvas.currentDialog==null && missingSale.earnings.failedTrips==0,
-            "Search timeout preserves known loaded trip without counting failure");
+        missingSale.tick(null,64099);
+        check(missingSale.engine.state==TradeEngine.RECOVER && missingSale.earnings.failedTrips==0,
+            "Search preserves the trip until the 60-second local budget expires");
+        missingSale.tick(null,64100);
+        check(missingSale.engine.state==TradeEngine.TO_MARKET && GameCanvas.currentDialog==null && missingSale.earnings.failedTrips==1,
+            "Local search ends after 60 seconds and counts the abandoned loaded trip once");
         missingDialog=new Object(); GameCanvas.currentDialog=missingDialog;
         missingSale.dialog(missingDialog,missingText,buttons("Ok",null)); missingSale.tick(null,65100);
-        check(GameCanvas.currentDialog==null && missingSale.engine.state==TradeEngine.RECOVER,
-            "Late informational rejection cannot erase ongoing recovery");
+        check(GameCanvas.currentDialog==null && missingSale.engine.state!=TradeEngine.RECOVER && missingSale.earnings.failedTrips==1,
+            "Late informational rejection cannot restart expired recovery");
         missingSale=sale(beast); missingDialog=new Object(); GameCanvas.currentDialog=missingDialog;
         missingSale.dialog(missingDialog,missingText,buttons("Ok",null)); missingSale.tick(beast,4100);
         check(GameCanvas.currentDialog==null && missingSale.engine.state==TradeEngine.RESYNC,
@@ -306,6 +309,14 @@ public final class AutoTradeLifecycleTest {
         live.tick(null,4100);
         check(live.engine.state==TradeEngine.WAIT_SALE && live.earnings.gold==0 && live.earnings.unmeasured==0,
             "Disappearance at Graham alone cannot complete a sale or erase the trip");
+
+        live=sale(beast);
+        live.view.cargo=0; live.view.full=false;
+        live.tick(beast,4100); live.tick(beast,6200);
+        check(live.earnings.successfulTrips==0 && live.earnings.unmeasured==0,
+            "Lost cargo while waiting for sale is not successful without acknowledgement or coins");
+        live.resetLostTrip(); live.resetLostTrip();
+        check(live.earnings.failedTrips==1,"Lost cargo abandoned for another trip fails exactly once");
 
         live=sale(beast); GameScreen.player.coin+=100;
         live.tick(beast,4100);
@@ -381,6 +392,13 @@ public final class AutoTradeLifecycleTest {
         check(live.view.cargo==2,"One message with purchase and cargo count is not counted twice");
 
         Port port=new Port(); config=new TradeConfig(); TradeEngine engine=new TradeEngine(config,port);
+        TradeEngine.View timedSearch=new TradeEngine.View(); timedSearch.cargo=6;
+        port.lost=true; engine.resumeRecovery(1000);
+        engine.tick(timedSearch,180999);
+        check(engine.state==TradeEngine.RECOVER,"Travel search retains trip before the three-minute deadline");
+        engine.tick(timedSearch,181000);
+        check(engine.state==TradeEngine.TO_MARKET && !port.lost && timedSearch.cargo==0,
+            "Travel search ends at three minutes even without reaching the recovery map");
         TradeEngine.View view=new TradeEngine.View(); engine.start(0); engine.resumeRecovery(1000);
         engine.stop(); engine.start(2000); view.connected=false; engine.tick(view,2100);
         view.connected=true; engine.tick(view,2200);
@@ -484,8 +502,11 @@ public final class AutoTradeLifecycleTest {
         check(live.view.inRecoveryMap && live.lastBeastMap.equals("Đồi Cát"),
             "Second disappearance uses latest sighting, not stale first recovery map");
         live.tick(null,200000);
-        check(live.engine.state==TradeEngine.RECOVER && live.earnings.failedTrips==0,
-            "Long route/search timeout cannot erase a known loaded trip");
+        check(live.engine.state==TradeEngine.TO_MARKET && live.earnings.failedTrips==1 && !live.hasLostTrip(),
+            "Loaded trip search expires and returns to market instead of renewing forever");
+        live.tick(null,201100);
+        check(live.engine.state!=TradeEngine.RECOVER && live.earnings.failedTrips==1,
+            "Expired recovery cannot restart from stale animal data or count failure twice");
 
         live=live(new TradeConfig(),"Sa Mạc");
         live.view.cargo=6; live.engine.state=TradeEngine.TO_SELL; live.tick(beast,2000);

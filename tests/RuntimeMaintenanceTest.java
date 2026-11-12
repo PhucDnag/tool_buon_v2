@@ -29,6 +29,11 @@ public final class RuntimeMaintenanceTest {
         check(trips.successfulTrips==1 && trips.failedTrips==1,"Confirmed sale succeeds even without known gold and cleanup is not failure");
         trips.observeCargo(true,false); trips.abandon(); trips.abandon();
         check(trips.failedTrips==2,"Abandoning purchased cargo counts once even before departure");
+        trips.observeCargo(true,false); trips.observeCargo(false,false);
+        trips.buyingAgain(true); trips.buyingAgain(true);
+        check(trips.failedTrips==3,"Buying again after losing cargo before departure fails the old trip once");
+        trips.observeCargo(true,false); trips.buyingAgain(false);
+        check(trips.failedTrips==3,"Additional cargo for the new trip is not another failure");
         File root=new File("build/maintenance-"+System.nanoTime()); root.mkdirs();
         String control=new File(root,"session.cmd").getPath();
         RuntimeMaintenance maintenance=new RuntimeMaintenance();

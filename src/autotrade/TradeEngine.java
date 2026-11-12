@@ -112,18 +112,14 @@ public final class TradeEngine {
         return true;
     }
     private void recoveryTimeout(View view,long now) {
-        // A saved location is only a search hint, not proof of a loaded trip.
-        // Otherwise stale/unknown cargo keeps renewing recovery forever.
-        if (view.cargo>0 || view.full) {
-            deadline=now+180000; recoverMapArrival=0; due=now+1000;
-            status="Chưa tìm thấy thú; giữ chuyến và tiếp tục tìm tại vị trí cuối";
-            port.notifyUser(status);
-        } else {
-            port.resetLostTrip(); state=TO_MARKET; stock=null; awaitingStock=false; emptyMask=0; due=now+1000;
-            recoverState=0; recoverMapArrival=0; escortAbsentAt=-1;
-            waitAtFirstMarket=false; buyAttempts=0; saleAttempts=0;
-            status="Hết thời gian tìm thú; về bãi mua chuyến mới";
-        }
+        // Last-known cargo must not renew the search forever when no animal
+        // has been found within the recovery budget.
+        port.stopMovement(); port.resetLostTrip();
+        view.cargo=0; view.full=false; view.animalMissing=false;
+        state=TO_MARKET; stock=null; awaitingStock=false; emptyMask=0; due=now+1000;
+        recoverState=0; recoverMapArrival=0; escortAbsentAt=-1;
+        waitAtFirstMarket=false; buyAttempts=0; saleAttempts=0;
+        status="Hết thời gian tìm thú; về bãi mua chuyến mới";
     }
     public void stop() { state=STOP; awaitingStock=false; stock=null; port.stopMovement(); status="Đã tắt"; }
     public int stockRequest() { return request; }
@@ -301,14 +297,14 @@ public final class TradeEngine {
                         recoveryTimeout(view,now); return;
                     }
                     if (now>=due) { port.recoverPreviousMap(); due=now+1000; }
-                    status="Đang về map dắt tiếp thú"; return;
+                    status="Đang về map tìm thú (còn "+Math.max(1,(deadline-now+999)/1000)+"s)"; return;
                 } else {
                     if (recoverMapArrival==0) recoverMapArrival=now;
                     if (now-recoverMapArrival>=60000 || now>=deadline) {
                         recoveryTimeout(view,now); return;
                     }
                     if (now>=due) { port.recoverPreviousMap(); due=now+1000; }
-                    status="Đang tìm thú trong map"; return;
+                    status="Đang tìm thú trong map (còn "+Math.max(1,(Math.min(deadline,recoverMapArrival+60000)-now+999)/1000)+"s)"; return;
                 }
             }
             else if (now>=deadline) {

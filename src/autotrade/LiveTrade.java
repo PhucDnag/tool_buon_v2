@@ -537,7 +537,7 @@ public final class LiveTrade implements TradeEngine.Port {
                 engine.state==TradeEngine.TO_SELL || engine.state==TradeEngine.SELL || engine.state==TradeEngine.WAIT_SALE);
         boolean coinsReceived=coinsBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.coin>coinsBeforeSale;
         boolean emptyAnimal=beast!=null && view.cargo==0 && !view.full;
-        boolean saleFinished=saleAcknowledged || emptyAnimal || coinsReceived && beast==null;
+        boolean saleFinished=saleAcknowledged || coinsReceived && (emptyAnimal || beast==null);
         if (engine.state==TradeEngine.WAIT_SALE && saleSent && saleFinished && !view.dead && seller!=null && distance(seller)<=64 && view.connected && Navigator.same(GameCanvas.loadmap.nameMap,TradeConfig.SELLER_MAP)) {
             if (engine.state==TradeEngine.WAIT_SALE || engine.state==TradeEngine.SELL) {
                 if (saleAmount<0 && coinsBeforeSale>=0 && GameScreen.player!=null && GameScreen.player.coin>coinsBeforeSale) {
@@ -795,7 +795,12 @@ public final class LiveTrade implements TradeEngine.Port {
                 && reportedStock.choose(0)<0 && !reportedStock.empty();
         boolean cargoReported=false;
         // An inventory refresh is not another purchase after an interrupted escort.
-        if (tradeResponse && isBuying() && TradeSignals.bought(s)) earnings.buyingAgain();
+        if (tradeResponse && isBuying() && TradeSignals.bought(s)) {
+            earnings.buyingAgain(view.cargo==0 && !view.full);
+            // Register each confirmed purchase even when several replies arrive
+            // in one tick, before a later reply can report that cargo was lost.
+            earnings.observeCargo(true,false);
+        }
         if (infoSource && e.text!=null) {
             int cargo=TradeSignals.cargo(e.text);
             if (cargo>=0) {
